@@ -36,6 +36,10 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL || "", SUPABASE_SERVICE_KEY || "");
+// Rota raiz (para abrir api.rhciapi.com.br sem erro)
+app.get("/", (req, res) => {
+  res.status(200).send("RH CIAPI Backend OK. Use /health e /api/...");
+});
 
 // Healthcheck (Render)
 app.get("/health", (req, res) => {
