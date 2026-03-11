@@ -4,7 +4,10 @@ const dotenv = require("dotenv");
 const path = require("path");
 const fs = require("fs");
 const { createClient } = require("@supabase/supabase-js");
+
 const feriasExportRoutes = require("./src/routes/feriasExportRoutes");
+const frequenciaRoutes = require("./src/routes/frequenciaRoutes");
+const frequenciaExportRoutes = require("./src/routes/frequenciaExportRoutes");
 
 dotenv.config();
 
@@ -89,7 +92,34 @@ app.get("/api/servidores", async (req, res) => {
   }
 });
 
+/*
+|--------------------------------------------------------------------------
+| Rotas de Férias
+|--------------------------------------------------------------------------
+*/
 app.use("/api/ferias", feriasExportRoutes);
+
+/*
+|--------------------------------------------------------------------------
+| Rotas de Frequência
+|--------------------------------------------------------------------------
+| GET    /api/frequencia
+| GET    /api/frequencia/:id
+| POST   /api/frequencia
+| PUT    /api/frequencia/:id
+| DELETE /api/frequencia/:id
+*/
+app.use("/api/frequencia", frequenciaRoutes);
+
+/*
+|--------------------------------------------------------------------------
+| Exportação de Frequência
+|--------------------------------------------------------------------------
+| POST /api/frequencia/exportar/docx
+| POST /api/frequencia/exportar/pdf
+| POST /api/frequencia/exportar/csv
+*/
+app.use("/api/frequencia", frequenciaExportRoutes);
 
 app.use((req, res) => {
   return res.status(404).json({
@@ -114,5 +144,8 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`Backend rodando na porta ${PORT}`);
   console.log(`Health: /health`);
+  console.log(`Servidores: GET /api/servidores`);
+  console.log(`Frequência: GET /api/frequencia`);
+  console.log(`Exportação de frequência: POST /api/frequencia/exportar/:formato`);
   console.log(`Exportação de férias: POST /api/ferias/exportar`);
 });
