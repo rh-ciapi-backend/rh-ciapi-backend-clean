@@ -15,17 +15,52 @@ const execFileAsync = promisify(execFile);
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const EXPORT_DIR = process.env.EXPORT_DIR || path.join(os.tmpdir(), 'exports');
-const TEMPLATE_DIR = path.join(process.cwd(), 'backend', 'templates');
-const TEMPLATE_PATH = path.join(TEMPLATE_DIR, 'modelo_frequencia.docx');
+const TEMPLATE_PATH = path.join(process.cwd(), 'backend', 'templates', 'modelo_frequencia.docx');
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.warn('[frequenciaExportService] SUPABASE_URL ou SUPABASE_SERVICE_KEY não definidos.');
 }
 
-const supabase = createClient(SUPABASE_URL || 'https://invalid.local', SUPABASE_SERVICE_KEY || 'invalid');
+const supabase = createClient(
+  SUPABASE_URL || 'https://invalid.local',
+  SUPABASE_SERVICE_KEY || 'invalid'
+);
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function normalizeText(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+function onlyDigits(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function normalizeDate(value) {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
+
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return '';
+
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
+
+function formatDateBR(value) {
+  const iso = normalizeDate(value);
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
 }
 
 function extensoMes(mes) {
@@ -46,10 +81,6 @@ function extensoMes(mes) {
   return meses[Number(mes) - 1] || '';
 }
 
-function pad2(n) {
-  return String(n).padStart(2, '0');
-}
-
 function buildMonthRange(ano, mes) {
   const start = `${ano}-${pad2(mes)}-01`;
   const lastDay = new Date(Number(ano), Number(mes), 0).getDate();
@@ -57,38 +88,29 @@ function buildMonthRange(ano, mes) {
   return { start, end, lastDay };
 }
 
-function normalizeText(value) {
-  if (value === null || value === undefined) return '';
-  return String(value).trim();
+function getWeekdayLabel(date) {
+  const wd = date.getDay();
+  if (wd === 6) return 'SÁBADO';
+  if (wd === 0) return 'DOMINGO';
+  return '';
 }
 
-function normalizeDate(value) {
-  const raw = normalizeText(value);
-  if (!raw) return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
+function dedupeUpper(values) {
+  const result = [];
+  const seen = new Set();
 
-  const dt = new Date(raw);
-  if (Number.isNaN(dt.getTime())) return raw;
+  for (const value of values) {
+    const text = normalizeText(value).toUpperCase();
+    if (!text) continue;
+    if (seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+  }
 
-  const y = dt.getFullYear();
-  const m = pad2(dt.getMonth() + 1);
-  const d = pad2(dt.getDate());
-  return `${y}-${m}-${d}`;
+  return result;
 }
 
-function formatDateBR(value) {
-  const iso = normalizeDate(value);
-  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
-  const [y, m, d] = iso.split('-');
-  return `${d}/${m}/${y}`;
-}
-
-function onlyDigits(value) {
-  return String(value || '').replace(/\D/g, '');
-}
-
-function getServidorDisplayName(servidor) {
+function getServidorNome(servidor) {
   return (
     normalizeText(servidor?.nome_completo) ||
     normalizeText(servidor?.nomeCompleto) ||
@@ -118,6 +140,10 @@ function getServidorCargo(servidor) {
   );
 }
 
+function getServidorCategoria(servidor) {
+  return normalizeText(servidor?.categoria);
+}
+
 function getServidorSetor(servidor) {
   return (
     normalizeText(servidor?.setor) ||
@@ -125,10 +151,6 @@ function getServidorSetor(servidor) {
     normalizeText(servidor?.lotacao_interna) ||
     ''
   );
-}
-
-function getServidorCategoria(servidor) {
-  return normalizeText(servidor?.categoria) || '';
 }
 
 function getChDiaria(servidor) {
@@ -149,38 +171,24 @@ function getChSemanal(servidor) {
   );
 }
 
-function getTurnoLabel(turno) {
-  const v = normalizeText(turno).toUpperCase();
-  if (!v) return '';
-  if (v === 'MANHA') return 'MANHÃ';
-  if (v === 'TARDE') return 'TARDE';
-  if (v === 'INTEGRAL') return 'INTEGRAL';
-  return v;
-}
-
-function buildWeekendLabel(date) {
-  const weekday = date.getDay();
-  if (weekday === 6) return 'SÁBADO';
-  if (weekday === 0) return 'DOMINGO';
-  return '';
+function mapTurno(turno) {
+  const t = normalizeText(turno).toUpperCase();
+  if (t === 'MANHA') return 'MANHA';
+  if (t === 'MANHÃ') return 'MANHA';
+  if (t === 'TARDE') return 'TARDE';
+  if (t === 'INTEGRAL') return 'INTEGRAL';
+  return t || 'INTEGRAL';
 }
 
 async function getServidorByIdOrCpf(servidorId) {
-  const idRaw = normalizeText(servidorId);
-  const cpfDigits = onlyDigits(idRaw);
-
-  let query = supabase.from('servidores').select('*').limit(1);
+  const raw = normalizeText(servidorId);
+  const cpfDigits = onlyDigits(raw);
 
   if (cpfDigits && cpfDigits.length >= 11) {
-    const { data, error } = await query.eq('cpf', cpfDigits).maybeSingle();
-    if (!error && data) return data;
-  }
-
-  {
     const { data, error } = await supabase
       .from('servidores')
       .select('*')
-      .eq('servidor', idRaw)
+      .eq('cpf', cpfDigits)
       .maybeSingle();
 
     if (!error && data) return data;
@@ -190,7 +198,17 @@ async function getServidorByIdOrCpf(servidorId) {
     const { data, error } = await supabase
       .from('servidores')
       .select('*')
-      .eq('id', idRaw)
+      .eq('servidor', raw)
+      .maybeSingle();
+
+    if (!error && data) return data;
+  }
+
+  {
+    const { data, error } = await supabase
+      .from('servidores')
+      .select('*')
+      .eq('id', raw)
       .maybeSingle();
 
     if (!error && data) return data;
@@ -201,6 +219,7 @@ async function getServidorByIdOrCpf(servidorId) {
 
 async function getEventosDoMes(ano, mes) {
   const { start, end } = buildMonthRange(ano, mes);
+
   const { data, error } = await supabase
     .from('eventos')
     .select('*')
@@ -209,34 +228,34 @@ async function getEventosDoMes(ano, mes) {
     .order('data', { ascending: true });
 
   if (error) {
-    console.warn('[frequenciaExportService] eventos:', error.message);
+    console.warn('[frequenciaExportService] erro ao buscar eventos:', error.message);
     return [];
   }
 
   return Array.isArray(data) ? data : [];
 }
 
-async function getOcorrenciasDoMes(ano, mes, servidorId, servidorCpf) {
+async function getOcorrenciasDoMes(ano, mes, servidorUuid, servidorCpf) {
   const { start, end } = buildMonthRange(ano, mes);
 
-  let data = [];
-  let error = null;
+  const results = [];
 
-  if (servidorId) {
-    const res = await supabase
+  if (servidorUuid) {
+    const { data, error } = await supabase
       .from('frequencia')
       .select('*')
       .gte('data', start)
       .lte('data', end)
-      .eq('servidor_id', servidorId)
+      .eq('servidor_id', servidorUuid)
       .order('data', { ascending: true });
 
-    data = res.data;
-    error = res.error;
+    if (!error && Array.isArray(data)) {
+      results.push(...data);
+    }
   }
 
-  if ((!data || data.length === 0) && servidorCpf) {
-    const res = await supabase
+  if (servidorCpf) {
+    const { data, error } = await supabase
       .from('frequencia')
       .select('*')
       .gte('data', start)
@@ -244,52 +263,75 @@ async function getOcorrenciasDoMes(ano, mes, servidorId, servidorCpf) {
       .eq('servidor_cpf', servidorCpf)
       .order('data', { ascending: true });
 
-    data = res.data;
-    error = res.error;
+    if (!error && Array.isArray(data)) {
+      results.push(...data);
+    }
   }
 
-  if (error) {
-    console.warn('[frequenciaExportService] frequencia:', error.message);
-    return [];
+  const unique = [];
+  const seen = new Set();
+
+  for (const item of results) {
+    const key = normalizeText(item?.id) || [
+      normalizeDate(item?.data),
+      normalizeText(item?.tipo),
+      normalizeText(item?.turno),
+      normalizeText(item?.descricao || item?.observacao),
+    ].join('|');
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
   }
 
-  return Array.isArray(data) ? data : [];
+  unique.sort((a, b) => normalizeDate(a?.data).localeCompare(normalizeDate(b?.data)));
+  return unique;
 }
 
 async function getFeriasDoServidor(servidorCpf, ano, mes) {
+  if (!servidorCpf) return [];
+
   const { data, error } = await supabase
     .from('ferias')
     .select('*')
     .eq('servidor_cpf', servidorCpf);
 
   if (error) {
-    console.warn('[frequenciaExportService] ferias:', error.message);
+    console.warn('[frequenciaExportService] erro ao buscar férias:', error.message);
     return [];
   }
 
   const { start, end } = buildMonthRange(ano, mes);
 
-  return (Array.isArray(data) ? data : []).flatMap((item) => {
-    const periodos = [
+  const periodos = [];
+
+  for (const item of Array.isArray(data) ? data : []) {
+    const candidatos = [
       {
-        inicio: normalizeDate(item.periodo1_inicio),
-        fim: normalizeDate(item.periodo1_fim),
         periodo: 1,
+        inicio: normalizeDate(item?.periodo1_inicio),
+        fim: normalizeDate(item?.periodo1_fim),
       },
       {
-        inicio: normalizeDate(item.periodo2_inicio),
-        fim: normalizeDate(item.periodo2_fim),
         periodo: 2,
+        inicio: normalizeDate(item?.periodo2_inicio),
+        fim: normalizeDate(item?.periodo2_fim),
       },
       {
-        inicio: normalizeDate(item.periodo3_inicio),
-        fim: normalizeDate(item.periodo3_fim),
         periodo: 3,
+        inicio: normalizeDate(item?.periodo3_inicio),
+        fim: normalizeDate(item?.periodo3_fim),
       },
     ];
 
-    return periodos.filter((p) => p.inicio && p.fim && !(p.fim < start || p.inicio > end));
-  });
+    for (const c of candidatos) {
+      if (!c.inicio || !c.fim) continue;
+      if (c.fim < start || c.inicio > end) continue;
+      periodos.push(c);
+    }
+  }
+
+  return periodos;
 }
 
 function collectBirthdays(servidor, ano, mes) {
@@ -301,12 +343,10 @@ function collectBirthdays(servidor, ano, mes) {
 
   if (dt.getMonth() + 1 !== Number(mes)) return [];
 
-  const day = dt.getDate();
-  const dateIso = `${ano}-${pad2(mes)}-${pad2(day)}`;
-
+  const iso = `${ano}-${pad2(mes)}-${pad2(dt.getDate())}`;
   return [{
-    data: dateIso,
-    titulo: `ANIVERSÁRIO DE ${getServidorDisplayName(servidor).toUpperCase()}`,
+    data: iso,
+    titulo: `ANIVERSÁRIO`,
   }];
 }
 
@@ -321,6 +361,7 @@ function mapEventosPorDia(eventos, incluirPonto) {
     if (tipo === 'PONTO' && !incluirPonto) continue;
 
     if (!map.has(iso)) map.set(iso, []);
+
     map.get(iso).push({
       tipo,
       titulo: normalizeText(evento?.titulo || evento?.nome || tipo),
@@ -339,10 +380,11 @@ function mapOcorrenciasPorDia(ocorrencias) {
     if (!iso) continue;
 
     if (!map.has(iso)) map.set(iso, []);
+
     map.get(iso).push({
       id: item?.id,
       tipo: normalizeText(item?.tipo || item?.ocorrencia).toUpperCase(),
-      turno: getTurnoLabel(item?.turno),
+      turno: mapTurno(item?.turno),
       descricao: normalizeText(item?.descricao || item?.observacao),
     });
   }
@@ -350,43 +392,44 @@ function mapOcorrenciasPorDia(ocorrencias) {
   return map;
 }
 
-function buildFeriasSet(feriasList) {
-  const set = new Map();
+function buildFeriasMap(periodos) {
+  const map = new Map();
 
-  for (const periodo of feriasList) {
-    const inicio = normalizeDate(periodo.inicio);
-    const fim = normalizeDate(periodo.fim);
-    if (!inicio || !fim) continue;
-
-    let cursor = new Date(`${inicio}T12:00:00`);
-    const end = new Date(`${fim}T12:00:00`);
+  for (const periodo of periodos) {
+    let cursor = new Date(`${periodo.inicio}T12:00:00`);
+    const end = new Date(`${periodo.fim}T12:00:00`);
 
     while (cursor <= end) {
       const iso = normalizeDate(cursor.toISOString());
-      if (!set.has(iso)) set.set(iso, []);
-      set.get(iso).push({
+      if (!map.has(iso)) map.set(iso, []);
+
+      map.get(iso).push({
         tipo: 'FERIAS',
-        titulo: `FÉRIAS ${periodo.periodo ? `- ${periodo.periodo}º PERÍODO` : ''}`.trim(),
+        titulo: `FÉRIAS${periodo.periodo ? ` - ${periodo.periodo}º PERÍODO` : ''}`,
       });
+
       cursor.setDate(cursor.getDate() + 1);
     }
   }
 
-  return set;
+  return map;
 }
 
 function buildBirthdaysMap(list) {
   const map = new Map();
+
   for (const item of list) {
-    const iso = normalizeDate(item.data);
+    const iso = normalizeDate(item?.data);
     if (!iso) continue;
+
     if (!map.has(iso)) map.set(iso, []);
     map.get(iso).push(item);
   }
+
   return map;
 }
 
-function buildDayDescription({
+function splitDayContent({
   date,
   eventosMap,
   ocorrenciasMap,
@@ -394,57 +437,60 @@ function buildDayDescription({
   birthdaysMap,
 }) {
   const iso = normalizeDate(date.toISOString());
-  const labels = [];
+  const rubricaParts = [];
+  const ocorrenciasManuais = [];
 
-  const weekend = buildWeekendLabel(date);
-  if (weekend) labels.push(weekend);
+  const weekend = getWeekdayLabel(date);
+  if (weekend) {
+    rubricaParts.push(weekend);
+  }
 
   const eventos = eventosMap.get(iso) || [];
   const ferias = feriasMap.get(iso) || [];
-  const ocorrencias = ocorrenciasMap.get(iso) || [];
   const birthdays = birthdaysMap.get(iso) || [];
+  const ocorrencias = ocorrenciasMap.get(iso) || [];
 
-  for (const item of eventos) {
-    if (item.tipo === 'FERIADO') labels.push('FERIADO');
-    else if (item.tipo === 'PONTO') labels.push('PONTO FACULTATIVO');
-    else labels.push(item.titulo.toUpperCase());
+  for (const evento of eventos) {
+    const tipo = normalizeText(evento?.tipo).toUpperCase();
+
+    if (tipo === 'FERIADO') {
+      rubricaParts.push('FERIADO');
+    } else if (tipo === 'PONTO') {
+      rubricaParts.push('PONTO FACULTATIVO');
+    } else {
+      rubricaParts.push(normalizeText(evento?.titulo).toUpperCase());
+    }
   }
 
   for (const item of ferias) {
-    labels.push(item.titulo.toUpperCase());
+    rubricaParts.push(normalizeText(item?.titulo).toUpperCase());
   }
 
   for (const item of birthdays) {
-    labels.push(item.titulo.toUpperCase());
+    rubricaParts.push(normalizeText(item?.titulo).toUpperCase());
   }
 
   for (const item of ocorrencias) {
-    const tipo = normalizeText(item.tipo).toUpperCase();
+    const tipo = normalizeText(item?.tipo).toUpperCase();
+    const turno = mapTurno(item?.turno);
+    const descricao = normalizeText(item?.descricao).toUpperCase();
 
-    if (tipo.includes('ATEST')) {
-      labels.push(item.turno ? `ATESTADO (${item.turno})` : 'ATESTADO');
-    } else if (tipo.includes('FALTA')) {
-      labels.push(item.turno ? `FALTA (${item.turno})` : 'FALTA');
-    } else if (tipo) {
-      labels.push(item.turno ? `${tipo} (${item.turno})` : tipo);
-    }
-
-    if (item.descricao) {
-      labels.push(item.descricao.toUpperCase());
+    if (tipo.includes('FALTA') || tipo.includes('ATEST')) {
+      ocorrenciasManuais.push({
+        tipo,
+        turno,
+        descricao,
+      });
+    } else {
+      const text = [tipo, descricao].filter(Boolean).join(' - ');
+      if (text) rubricaParts.push(text);
     }
   }
 
-  const unique = [];
-  const seen = new Set();
-
-  for (const item of labels) {
-    const key = normalizeText(item).toUpperCase();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    unique.push(key);
-  }
-
-  return unique.join(' • ');
+  return {
+    rubrica: dedupeUpper(rubricaParts).join(' / '),
+    ocorrenciasManuais,
+  };
 }
 
 async function convertDocxToPdf(inputDocxPath, outputDir) {
@@ -464,18 +510,18 @@ async function convertDocxToPdf(inputDocxPath, outputDir) {
       console.warn('[frequenciaExportService] soffice stderr:', result.stderr);
     }
 
-    const pdfPath = inputDocxPath.replace(/\.docx$/i, '.pdf');
-    if (fs.existsSync(pdfPath)) {
-      return pdfPath;
+    const sameDirPdf = inputDocxPath.replace(/\.docx$/i, '.pdf');
+    if (fs.existsSync(sameDirPdf)) {
+      return sameDirPdf;
     }
 
-    const pdfCandidate = path.join(
+    const outPdf = path.join(
       outputDir,
-      path.basename(inputDocxPath).replace(/\.docx$/i, '.pdf'),
+      path.basename(inputDocxPath).replace(/\.docx$/i, '.pdf')
     );
 
-    if (fs.existsSync(pdfCandidate)) {
-      return pdfCandidate;
+    if (fs.existsSync(outPdf)) {
+      return outPdf;
     }
 
     throw new Error('PDF não foi gerado pelo LibreOffice.');
@@ -484,6 +530,64 @@ async function convertDocxToPdf(inputDocxPath, outputDir) {
       `Conversão para PDF indisponível neste ambiente. Instale LibreOffice/soffice no servidor. Detalhe: ${error.message}`
     );
   }
+}
+
+function buildPayload({ servidor, ano, mes, incluirPonto, eventos, ocorrencias, ferias, birthdays }) {
+  const { lastDay } = buildMonthRange(ano, mes);
+
+  const eventosMap = mapEventosPorDia(eventos, incluirPonto);
+  const ocorrenciasMap = mapOcorrenciasPorDia(ocorrencias);
+  const feriasMap = buildFeriasMap(ferias);
+  const birthdaysMap = buildBirthdaysMap(birthdays);
+
+  const linhas = [];
+
+  for (let dia = 1; dia <= lastDay; dia += 1) {
+    const date = new Date(ano, mes - 1, dia, 12, 0, 0);
+    const iso = `${ano}-${pad2(mes)}-${pad2(dia)}`;
+    const parts = splitDayContent({
+      date,
+      eventosMap,
+      ocorrenciasMap,
+      feriasMap,
+      birthdaysMap,
+    });
+
+    linhas.push({
+      dia,
+      dataIso: iso,
+      turnoTexto: formatDateBR(iso),
+      rubrica: parts.rubrica,
+      ocorrenciasManuais: parts.ocorrenciasManuais,
+    });
+  }
+
+  return {
+    servidor: {
+      nome: getServidorNome(servidor).toUpperCase(),
+      matricula: getServidorMatricula(servidor),
+      cpf: getServidorCpf(servidor),
+      cargo: getServidorCargo(servidor).toUpperCase(),
+      categoria: getServidorCategoria(servidor).toUpperCase(),
+      setor: getServidorSetor(servidor).toUpperCase(),
+      chDiaria: getChDiaria(servidor),
+      chSemanal: getChSemanal(servidor),
+    },
+    competencia: {
+      ano,
+      mes,
+      mesExtenso: extensoMes(mes),
+      diasNoMes: lastDay,
+    },
+    filtros: {
+      incluirPonto: Boolean(incluirPonto),
+    },
+    linhas,
+    eventos,
+    ocorrencias,
+    ferias,
+    birthdays,
+  };
 }
 
 async function exportarFrequencia({ formato, body }) {
@@ -516,7 +620,7 @@ async function exportarFrequencia({ formato, body }) {
     };
   }
 
-  if (!fs.existsSync(TEMPLATE_PATH) && formato === 'docx') {
+  if ((formato === 'docx' || formato === 'pdf') && !fs.existsSync(TEMPLATE_PATH)) {
     return {
       kind: 'json',
       statusCode: 500,
@@ -529,6 +633,7 @@ async function exportarFrequencia({ formato, body }) {
   }
 
   const servidor = await getServidorByIdOrCpf(servidorId);
+
   if (!servidor) {
     return {
       kind: 'json',
@@ -543,60 +648,20 @@ async function exportarFrequencia({ formato, body }) {
   const [eventos, ocorrencias, ferias, birthdays] = await Promise.all([
     getEventosDoMes(ano, mes),
     getOcorrenciasDoMes(ano, mes, servidorUuid, servidorCpf),
-    servidorCpf ? getFeriasDoServidor(servidorCpf, ano, mes) : [],
+    getFeriasDoServidor(servidorCpf, ano, mes),
     Promise.resolve(collectBirthdays(servidor, ano, mes)),
   ]);
 
-  const { lastDay } = buildMonthRange(ano, mes);
-  const eventosMap = mapEventosPorDia(eventos, incluirPonto);
-  const ocorrenciasMap = mapOcorrenciasPorDia(ocorrencias);
-  const feriasMap = buildFeriasSet(ferias);
-  const birthdaysMap = buildBirthdaysMap(birthdays);
-
-  const linhas = [];
-  for (let dia = 1; dia <= lastDay; dia += 1) {
-    const date = new Date(ano, mes - 1, dia, 12, 0, 0);
-    const iso = `${ano}-${pad2(mes)}-${pad2(dia)}`;
-
-    linhas.push({
-      dia,
-      dataIso: iso,
-      descricao: buildDayDescription({
-        date,
-        eventosMap,
-        ocorrenciasMap,
-        feriasMap,
-        birthdaysMap,
-      }),
-    });
-  }
-
-  const payload = {
-    servidor: {
-      nome: getServidorDisplayName(servidor).toUpperCase(),
-      matricula: getServidorMatricula(servidor),
-      cpf: servidorCpf,
-      cargo: getServidorCargo(servidor).toUpperCase(),
-      setor: getServidorSetor(servidor).toUpperCase(),
-      categoria: getServidorCategoria(servidor).toUpperCase(),
-      chDiaria: getChDiaria(servidor),
-      chSemanal: getChSemanal(servidor),
-    },
-    competencia: {
-      ano,
-      mes,
-      mesExtenso: extensoMes(mes),
-      diasNoMes: lastDay,
-    },
-    filtros: {
-      incluirPonto,
-    },
-    linhas,
-    ocorrencias,
+  const payload = buildPayload({
+    servidor,
+    ano,
+    mes,
+    incluirPonto,
     eventos,
+    ocorrencias,
     ferias,
     birthdays,
-  };
+  });
 
   const exportSubDir = path.join(EXPORT_DIR, 'frequencia');
   ensureDir(exportSubDir);
@@ -631,8 +696,7 @@ async function exportarFrequencia({ formato, body }) {
       kind: 'download',
       filePath: docxPath,
       fileName: `${baseFileName}.docx`,
-      contentType:
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     };
   }
 
