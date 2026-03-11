@@ -4,7 +4,7 @@ const dotenv = require("dotenv");
 const path = require("path");
 const fs = require("fs");
 const { createClient } = require("@supabase/supabase-js");
-const feriasExportRoutes = require("../src/routes/feriasExportRoutes");
+const feriasExportRoutes = require("./src/routes/feriasExportRoutes");
 
 dotenv.config();
 
@@ -20,24 +20,22 @@ const corsOrigins = (process.env.CORS_ORIGINS || "")
 
 app.use(
   cors({
-    origin: function (origin, cb) {
+    origin(origin, cb) {
       if (!origin) return cb(null, true);
       if (corsOrigins.length === 0) return cb(null, true);
-      return corsOrigins.includes(origin)
-        ? cb(null, true)
-        : cb(new Error("CORS bloqueado: " + origin));
+      if (corsOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error(`CORS bloqueado: ${origin}`));
     },
     credentials: true,
   })
 );
 
 const PORT = process.env.PORT || 5000;
-
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-  console.warn("⚠️ SUPABASE_URL/SUPABASE_SERVICE_KEY não configurados.");
+  console.warn("SUPABASE_URL ou SUPABASE_SERVICE_KEY não configurados.");
 }
 
 const supabase = createClient(SUPABASE_URL || "", SUPABASE_SERVICE_KEY || "");
@@ -50,7 +48,7 @@ try {
   }
   app.locals.exportDir = exportDir;
 } catch (err) {
-  console.warn("⚠️ Não foi possível preparar EXPORT_DIR:", String(err));
+  console.warn("Não foi possível preparar EXPORT_DIR:", String(err));
 }
 
 app.get("/", (req, res) => {
@@ -58,7 +56,7 @@ app.get("/", (req, res) => {
 });
 
 app.get("/health", (req, res) => {
-  res.json({
+  res.status(200).json({
     ok: true,
     service: "rh-ciapi-backend",
     time: new Date().toISOString(),
@@ -67,7 +65,10 @@ app.get("/health", (req, res) => {
 
 app.get("/api/servidores", async (req, res) => {
   try {
-    const { data, error } = await supabase.from("servidores").select("*").limit(1000);
+    const { data, error } = await supabase
+      .from("servidores")
+      .select("*")
+      .limit(1000);
 
     if (error) {
       return res.status(400).json({
@@ -76,14 +77,14 @@ app.get("/api/servidores", async (req, res) => {
       });
     }
 
-    return res.json({
+    return res.status(200).json({
       ok: true,
-      data,
+      data: Array.isArray(data) ? data : [],
     });
-  } catch (e) {
+  } catch (error) {
     return res.status(500).json({
       ok: false,
-      error: String(e),
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 });
@@ -98,10 +99,7 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error("❌ Erro no backend:", err);
-
-  const message =
-    err instanceof Error ? err.message : "Erro interno inesperado no servidor.";
+  console.error("Erro no backend:", err);
 
   if (res.headersSent) {
     return next(err);
@@ -109,12 +107,12 @@ app.use((err, req, res, next) => {
 
   return res.status(500).json({
     ok: false,
-    error: message,
+    error: err instanceof Error ? err.message : "Erro interno inesperado no servidor.",
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ Backend rodando na porta ${PORT}`);
-  console.log(`🌐 Health: /health`);
-  console.log(`📄 Exportação de férias: POST /api/ferias/exportar`);
+  console.log(`Backend rodando na porta ${PORT}`);
+  console.log(`Health: /health`);
+  console.log(`Exportação de férias: POST /api/ferias/exportar`);
 });
