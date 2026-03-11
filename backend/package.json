@@ -1,15 +1,18 @@
 {
   "name": "rh-ciapi-backend",
   "version": "1.0.0",
-  "description": "Backend RH CIAPI (Render + Supabase)",
+  "description": "Backend do projeto RH CIAPI com Express, Supabase e exportação DOCX/PDF/CSV",
   "main": "server.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.0",
+    "@supabase/supabase-js": "^2.49.1",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.18.2"
+    "docxtemplater": "^3.62.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pizzip": "^3.1.8"
   }
 }
