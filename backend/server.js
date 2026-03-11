@@ -5,11 +5,11 @@ const path = require("path");
 const fs = require("fs");
 const { createClient } = require("@supabase/supabase-js");
 
+dotenv.config();
+
 const feriasExportRoutes = require("./src/routes/feriasExportRoutes");
 const frequenciaRoutes = require("./src/routes/frequenciaRoutes");
 const frequenciaExportRoutes = require("./src/routes/frequenciaExportRoutes");
-
-dotenv.config();
 
 const app = express();
 
@@ -54,11 +54,11 @@ try {
   console.warn("Não foi possível preparar EXPORT_DIR:", String(err));
 }
 
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   res.status(200).send("RH CIAPI Backend OK");
 });
 
-app.get("/health", (req, res) => {
+app.get("/health", (_req, res) => {
   res.status(200).json({
     ok: true,
     service: "rh-ciapi-backend",
@@ -66,7 +66,7 @@ app.get("/health", (req, res) => {
   });
 });
 
-app.get("/api/servidores", async (req, res) => {
+app.get("/api/servidores", async (_req, res) => {
   try {
     const { data, error } = await supabase
       .from("servidores")
@@ -92,33 +92,8 @@ app.get("/api/servidores", async (req, res) => {
   }
 });
 
-/*
-|--------------------------------------------------------------------------
-| Rotas de Férias
-|--------------------------------------------------------------------------
-*/
 app.use("/api/ferias", feriasExportRoutes);
-
-/*
-|--------------------------------------------------------------------------
-| Rotas de Frequência
-|--------------------------------------------------------------------------
-| GET    /api/frequencia
-| GET    /api/frequencia/:id
-| POST   /api/frequencia
-| PUT    /api/frequencia/:id
-| DELETE /api/frequencia/:id
-*/
 app.use("/api/frequencia", frequenciaRoutes);
-
-/*
-|--------------------------------------------------------------------------
-| Exportação de Frequência
-|--------------------------------------------------------------------------
-| POST /api/frequencia/exportar/docx
-| POST /api/frequencia/exportar/pdf
-| POST /api/frequencia/exportar/csv
-*/
 app.use("/api/frequencia", frequenciaExportRoutes);
 
 app.use((req, res) => {
@@ -128,7 +103,7 @@ app.use((req, res) => {
   });
 });
 
-app.use((err, req, res, next) => {
+app.use((err, _req, res, next) => {
   console.error("Erro no backend:", err);
 
   if (res.headersSent) {
@@ -143,9 +118,9 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`Backend rodando na porta ${PORT}`);
-  console.log(`Health: /health`);
-  console.log(`Servidores: GET /api/servidores`);
-  console.log(`Frequência: GET /api/frequencia`);
-  console.log(`Exportação de frequência: POST /api/frequencia/exportar/:formato`);
-  console.log(`Exportação de férias: POST /api/ferias/exportar`);
+  console.log("Health: /health");
+  console.log("Servidores: GET /api/servidores");
+  console.log("Frequência: GET /api/frequencia");
+  console.log("Exportação de frequência: POST /api/frequencia/exportar/:formato");
+  console.log("Exportação de férias: POST /api/ferias/exportar");
 });
