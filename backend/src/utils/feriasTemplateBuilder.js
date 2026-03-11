@@ -1,7 +1,3 @@
-const fs = require("fs");
-const path = require("path");
-const PizZip = require("pizzip");
-const Docxtemplater = require("docxtemplater");
 const { createClient } = require("@supabase/supabase-js");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -15,37 +11,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   auth: { persistSession: false },
 });
 
-const TEMPLATE_CANDIDATES = [
-  path.join(__dirname, "../../templates/modelo_ferias_oficial.docx"),
-  path.join(__dirname, "../../templates/modelo_ferias.docx"),
-  path.join(__dirname, "../../templates/ferias/modelo_ferias_oficial.docx"),
-];
-
-function resolveTemplatePath() {
-  for (const filePath of TEMPLATE_CANDIDATES) {
-    if (fs.existsSync(filePath)) {
-      return filePath;
-    }
-  }
-
-  throw new Error(
-    `Template oficial de férias não encontrado. Verifique um destes caminhos: ${TEMPLATE_CANDIDATES.join(
-      " | "
-    )}`
-  );
-}
-
-function onlyDigits(value) {
-  return String(value || "").replace(/\D/g, "");
-}
-
-function normalizeText(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toUpperCase();
-}
+const PAGE_SIZE = 18;
 
 function safeString(value, fallback = "") {
   if (value === null || value === undefined) return fallback;
@@ -53,44 +19,24 @@ function safeString(value, fallback = "") {
   return text || fallback;
 }
 
-function normalizeStatus(value) {
-  const v = normalizeText(value);
-  if (v === "ATIVO") return "ATIVO";
-  if (v === "INATIVO") return "INATIVO";
-  return safeString(value, "NÃO INFORMADO");
+function normalizeText(value) {
+  return safeString(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase();
 }
 
-function normalizeCategory(value) {
-  const v = normalizeText(value);
-
-  const known = [
-    "EFETIVO SESAU",
-    "SELETIVO SESAU",
-    "EFETIVO SETRABES",
-    "SELETIVO SETRABES",
-    "FEDERAIS SETRABES",
-    "COMISSIONADOS",
-  ];
-
-  const found = known.find((item) => normalizeText(item) === v);
-  return found || safeString(value, "NÃO INFORMADO");
+function onlyDigits(value) {
+  return safeString(value).replace(/\D/g, "");
 }
 
-function parseBoolean(value, defaultValue = false) {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value === 1;
-  if (typeof value === "string") {
-    const v = value.trim().toLowerCase();
-    if (["1", "true", "sim", "yes"].includes(v)) return true;
-    if (["0", "false", "nao", "não", "no"].includes(v)) return false;
-  }
-  return defaultValue;
-}
-
-function parseMonth(value) {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 1 || n > 12) return null;
-  return n;
+function escapeHtml(value) {
+  return safeString(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function formatDateBr(value) {
@@ -99,22 +45,18 @@ function formatDateBr(value) {
   const raw = String(value).trim();
   if (!raw) return "";
 
-  const ymd = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (ymd) {
-    return `${ymd[3]}/${ymd[2]}/${ymd[1]}`;
-  }
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
 
-  const dmy = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (dmy) {
-    return raw;
-  }
+  const br = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (br) return raw;
 
   const date = new Date(raw);
   if (!Number.isNaN(date.getTime())) {
-    const day = String(date.getDate()).padStart(2, "0");
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const year = String(date.getFullYear());
-    return `${day}/${month}/${year}`;
+    const dd = String(date.getDate()).padStart(2, "0");
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const yyyy = String(date.getFullYear());
+    return `${dd}/${mm}/${yyyy}`;
   }
 
   return raw;
@@ -122,6 +64,7 @@ function formatDateBr(value) {
 
 function parseIsoDate(value) {
   if (!value) return null;
+
   const raw = String(value).trim();
 
   const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -130,7 +73,6 @@ function parseIsoDate(value) {
       year: Number(iso[1]),
       month: Number(iso[2]),
       day: Number(iso[3]),
-      iso: `${iso[1]}-${iso[2]}-${iso[3]}`,
     };
   }
 
@@ -140,7 +82,6 @@ function parseIsoDate(value) {
       year: Number(br[3]),
       month: Number(br[2]),
       day: Number(br[1]),
-      iso: `${br[3]}-${br[2]}-${br[1]}`,
     };
   }
 
@@ -150,10 +91,6 @@ function parseIsoDate(value) {
       year: date.getFullYear(),
       month: date.getMonth() + 1,
       day: date.getDate(),
-      iso: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
-        2,
-        "0"
-      )}-${String(date.getDate()).padStart(2, "0")}`,
     };
   }
 
@@ -175,7 +112,7 @@ function periodTouchesMonth(start, end, month, year) {
 
   const intervalEnd = endDate
     ? new Date(endDate.year, endDate.month - 1, endDate.day)
-    : new Date(year, month - 1 + 1, 0);
+    : new Date(year, month, 0);
 
   const monthStart = new Date(year, month - 1, 1);
   const monthEnd = new Date(year, month, 0);
@@ -183,56 +120,50 @@ function periodTouchesMonth(start, end, month, year) {
   return intervalStart <= monthEnd && intervalEnd >= monthStart;
 }
 
-function normalizePeriod(start, end, month, year) {
-  const hasAny = safeString(start) || safeString(end);
-  if (!hasAny) {
-    return {
-      inicio: "",
-      fim: "",
-      valido: false,
-      noMes: false,
-    };
-  }
+function normalizeCategory(value) {
+  const v = normalizeText(value);
 
-  const inicio = formatDateBr(start);
-  const fim = formatDateBr(end);
-  const noMes = periodTouchesMonth(start, end, month, year);
-
-  return {
-    inicio,
-    fim,
-    valido: !!(inicio || fim),
-    noMes,
-  };
-}
-
-function monthNamePtBr(monthNumber) {
-  const months = [
-    "",
-    "JANEIRO",
-    "FEVEREIRO",
-    "MARÇO",
-    "ABRIL",
-    "MAIO",
-    "JUNHO",
-    "JULHO",
-    "AGOSTO",
-    "SETEMBRO",
-    "OUTUBRO",
-    "NOVEMBRO",
-    "DEZEMBRO",
+  const valid = [
+    "EFETIVO SESAU",
+    "SELETIVO SESAU",
+    "EFETIVO SETRABES",
+    "SELETIVO SETRABES",
+    "FEDERAIS SETRABES",
+    "COMISSIONADOS",
   ];
-  return months[monthNumber] || "TODOS OS MESES";
+
+  const found = valid.find((item) => normalizeText(item) === v);
+  return found || safeString(value, "NÃO INFORMADO");
 }
 
-function formatNowBr() {
-  const now = new Date();
-  const dd = String(now.getDate()).padStart(2, "0");
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const yyyy = String(now.getFullYear());
-  const hh = String(now.getHours()).padStart(2, "0");
-  const mi = String(now.getMinutes()).padStart(2, "0");
-  return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+function normalizeStatus(value) {
+  const v = normalizeText(value);
+  if (v === "ATIVO") return "ATIVO";
+  if (v === "INATIVO") return "INATIVO";
+  return safeString(value, "NÃO INFORMADO");
+}
+
+function monthNamePtBr(month) {
+  const names = {
+    1: "Janeiro",
+    2: "Fevereiro",
+    3: "Março",
+    4: "Abril",
+    5: "Maio",
+    6: "Junho",
+    7: "Julho",
+    8: "Agosto",
+    9: "Setembro",
+    10: "Outubro",
+    11: "Novembro",
+    12: "Dezembro",
+  };
+
+  return names[Number(month)] || "Todos os meses";
+}
+
+function yearNow() {
+  return new Date().getFullYear();
 }
 
 function pickRequestData(payload) {
@@ -241,31 +172,25 @@ function pickRequestData(payload) {
   return { ...query, ...body };
 }
 
-function normalizeFilters(raw) {
-  const setor = safeString(raw.setor || raw.lotacao || raw.setorFiltro, "Todos");
-  const categoria = safeString(
-    raw.categoria || raw.category || raw.categoriaFiltro,
-    "Todas"
-  );
-  const status = safeString(raw.status || raw.statusServidor, "ATIVO");
-  const mes = raw.mes ?? raw.month ?? null;
-  const ano = raw.ano ?? raw.year ?? new Date().getFullYear();
-  const formato = safeString(raw.formato || raw.outputFormat, "DOCX");
-  const tipoExtracao = safeString(
-    raw.tipoExtracao || raw.tipo_extracao || raw.extracao,
-    "somente_com_ferias"
-  );
-  const ordenar = safeString(raw.ordenacao || raw.orderBy, "nome_az");
+function parseMonth(value) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > 12) return null;
+  return n;
+}
 
+function normalizeFilters(raw) {
   return {
-    setor,
-    categoria,
-    status,
-    mes: parseMonth(mes),
-    ano: Number(ano) || new Date().getFullYear(),
-    formato,
-    tipoExtracao: normalizeText(tipoExtracao),
-    ordenar: normalizeText(ordenar),
+    setor: safeString(raw.setor || raw.lotacao || raw.setorFiltro, "TODOS OS SETORES"),
+    categoria: safeString(raw.categoria || raw.category || raw.categoriaFiltro, "TODAS"),
+    status: safeString(raw.status || raw.statusServidor, "ATIVO"),
+    mes: parseMonth(raw.mes ?? raw.month ?? null),
+    ano: Number(raw.ano ?? raw.year ?? yearNow()) || yearNow(),
+    ordenacao: safeString(raw.ordenacao || raw.orderBy, "Nome A-Z"),
+    tipoExtracao: safeString(
+      raw.tipoExtracao || raw.tipo_extracao || raw.extracao,
+      "Somente servidores com férias cadastradas"
+    ),
+    formato: safeString(raw.formato || raw.outputFormat, "DOC"),
   };
 }
 
@@ -283,7 +208,9 @@ async function fetchServidores() {
 }
 
 async function fetchFerias() {
-  const { data, error } = await supabase.from("ferias").select("*");
+  const { data, error } = await supabase
+    .from("ferias")
+    .select("*");
 
   if (error) {
     throw new Error(`Erro ao consultar férias: ${error.message}`);
@@ -297,12 +224,8 @@ function buildServidoresIndex(rows) {
   const byNome = new Map();
 
   for (const row of rows) {
-    const cpf = onlyDigits(
-      row?.cpf || row?.servidor_cpf || row?.cpf_servidor || row?.documento
-    );
-    const nome = normalizeText(
-      row?.nomeCompleto || row?.nome_completo || row?.nome || row?.servidor_nome
-    );
+    const cpf = onlyDigits(row?.cpf);
+    const nome = normalizeText(row?.nomeCompleto || row?.nome_completo || row?.nome);
 
     if (cpf) byCpf.set(cpf, row);
     if (nome) byNome.set(nome, row);
@@ -312,43 +235,34 @@ function buildServidoresIndex(rows) {
 }
 
 function resolveServidorFromFerias(feriasRow, index) {
-  const cpfKey = onlyDigits(
-    feriasRow?.servidor_cpf ||
-      feriasRow?.cpf ||
-      feriasRow?.cpf_servidor ||
-      feriasRow?.documento
+  const cpf = onlyDigits(
+    feriasRow?.servidor_cpf || feriasRow?.cpf || feriasRow?.cpf_servidor
   );
 
-  if (cpfKey && index.byCpf.has(cpfKey)) {
-    return index.byCpf.get(cpfKey);
+  if (cpf && index.byCpf.has(cpf)) {
+    return index.byCpf.get(cpf);
   }
 
-  const nomeKey = normalizeText(
-    feriasRow?.nome ||
-      feriasRow?.nome_servidor ||
-      feriasRow?.servidor_nome ||
-      feriasRow?.servidor
+  const nome = normalizeText(
+    feriasRow?.nome || feriasRow?.nome_servidor || feriasRow?.servidor_nome || feriasRow?.servidor
   );
 
-  if (nomeKey && index.byNome.has(nomeKey)) {
-    return index.byNome.get(nomeKey);
+  if (nome && index.byNome.has(nome)) {
+    return index.byNome.get(nome);
   }
 
   return null;
 }
 
-function mergeServidorFerias(servidor, feriasRow, filters) {
+function buildMergedRow(servidor, feriasRow, filters) {
   const nome = safeString(
     servidor?.nomeCompleto || servidor?.nome_completo || servidor?.nome,
-    safeString(
-      feriasRow?.nome || feriasRow?.nome_servidor || feriasRow?.servidor_nome,
-      "NOME NÃO INFORMADO"
-    )
+    feriasRow?.nome || feriasRow?.nome_servidor || feriasRow?.servidor_nome || "NOME NÃO INFORMADO"
   );
 
   const matricula = safeString(
     servidor?.matricula || feriasRow?.matricula,
-    "NÃO INFORMADA"
+    ""
   );
 
   const categoria = normalizeCategory(
@@ -374,30 +288,19 @@ function mergeServidorFerias(servidor, feriasRow, filters) {
       feriasRow?.cpf_servidor
   );
 
-  const periodo1 = normalizePeriod(
-    feriasRow?.periodo1_inicio,
-    feriasRow?.periodo1_fim,
-    filters.mes,
-    filters.ano
-  );
-  const periodo2 = normalizePeriod(
-    feriasRow?.periodo2_inicio,
-    feriasRow?.periodo2_fim,
-    filters.mes,
-    filters.ano
-  );
-  const periodo3 = normalizePeriod(
-    feriasRow?.periodo3_inicio,
-    feriasRow?.periodo3_fim,
-    filters.mes,
-    filters.ano
-  );
+  const p1i = feriasRow?.periodo1_inicio || null;
+  const p1f = feriasRow?.periodo1_fim || null;
+  const p2i = feriasRow?.periodo2_inicio || null;
+  const p2f = feriasRow?.periodo2_fim || null;
+  const p3i = feriasRow?.periodo3_inicio || null;
+  const p3f = feriasRow?.periodo3_fim || null;
 
-  const possuiFerias =
-    periodo1.valido || periodo2.valido || periodo3.valido || !!feriasRow;
+  const possuiFerias = !!(p1i || p1f || p2i || p2f || p3i || p3f);
 
   const possuiFeriasNoMes =
-    periodo1.noMes || periodo2.noMes || periodo3.noMes || false;
+    periodTouchesMonth(p1i, p1f, filters.mes, filters.ano) ||
+    periodTouchesMonth(p2i, p2f, filters.mes, filters.ano) ||
+    periodTouchesMonth(p3i, p3f, filters.mes, filters.ano);
 
   return {
     nome,
@@ -405,15 +308,14 @@ function mergeServidorFerias(servidor, feriasRow, filters) {
     categoria,
     setor,
     status,
-    cpf: cpf
-      ? cpf.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, "$1.$2.$3-$4")
-      : "",
-    periodo1_inicio: periodo1.inicio,
-    periodo1_fim: periodo1.fim,
-    periodo2_inicio: periodo2.inicio,
-    periodo2_fim: periodo2.fim,
-    periodo3_inicio: periodo3.inicio,
-    periodo3_fim: periodo3.fim,
+    cpf,
+    exercicio: String(filters.ano),
+    periodo1_inicio: formatDateBr(p1i),
+    periodo1_fim: formatDateBr(p1f),
+    periodo2_inicio: formatDateBr(p2i),
+    periodo2_fim: formatDateBr(p2f),
+    periodo3_inicio: formatDateBr(p3i),
+    periodo3_fim: formatDateBr(p3f),
     possuiFerias,
     possuiFeriasNoMes,
   };
@@ -439,124 +341,304 @@ function applyFilters(rows, filters) {
 
   if (
     normalizeText(filters.setor) !== "TODOS" &&
-    normalizeText(filters.setor) !== "TODAS"
+    normalizeText(filters.setor) !== "TODAS" &&
+    normalizeText(filters.setor) !== "TODOS OS SETORES"
   ) {
     result = result.filter(
       (row) => normalizeText(row.setor) === normalizeText(filters.setor)
     );
   }
 
-  if (filters.mes && filters.ano) {
-    result = result.filter(
-      (row) =>
-        row.possuiFeriasNoMes ||
-        normalizeText(filters.tipoExtracao) === "TODOS" ||
-        normalizeText(filters.tipoExtracao) === "TODOS_OS_SERVIDORES"
-    );
-  }
-
   const tipo = normalizeText(filters.tipoExtracao);
 
   if (
-    tipo === "SOMENTE_COM_FERIAS" ||
-    tipo === "SOMENTE_SERVIDORES_COM_FERIAS_CADASTRADAS"
+    tipo === "SOMENTE SERVIDORES COM FERIAS CADASTRADAS" ||
+    tipo === "SOMENTE_COM_FERIAS"
   ) {
     result = result.filter((row) => row.possuiFerias);
   }
 
   if (
-    tipo === "SOMENTE_COM_FERIAS_NO_MES" ||
-    tipo === "SOMENTE_FERIAS_NO_MES"
+    tipo === "SOMENTE FERIAS NO MES" ||
+    tipo === "SOMENTE_COM_FERIAS_NO_MES"
   ) {
     result = result.filter((row) => row.possuiFeriasNoMes);
   }
 
-  if (filters.ordenar === "NOME_ZA") {
+  if (filters.mes) {
+    result = result.filter((row) => row.possuiFeriasNoMes);
+  }
+
+  const ord = normalizeText(filters.ordenacao);
+
+  if (ord === "NOME Z-A") {
     result.sort((a, b) => b.nome.localeCompare(a.nome, "pt-BR"));
-  } else if (filters.ordenar === "SETOR_AZ") {
+  } else if (ord === "SETOR A-Z") {
     result.sort(
       (a, b) =>
         a.setor.localeCompare(b.setor, "pt-BR") ||
-        a.nome.localeCompare(b.nome, "pt-BR")
-    );
-  } else if (filters.ordenar === "CATEGORIA_AZ") {
-    result.sort(
-      (a, b) =>
-        a.categoria.localeCompare(b.categoria, "pt-BR") ||
         a.nome.localeCompare(b.nome, "pt-BR")
     );
   } else {
     result.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
   }
 
-  return result.map((row, idx) => ({
+  return result.map((row, index) => ({
     ...row,
-    ordem: idx + 1,
+    ordem: index + 1,
   }));
 }
 
-function buildContext(rows, filters) {
-  const totalComFerias = rows.filter((row) => row.possuiFerias).length;
-  const totalSemFerias = rows.filter((row) => !row.possuiFerias).length;
-
-  return {
-    titulo: "PROGRAMAÇÃO ANUAL DE FÉRIAS",
-    subtitulo: "CIAPI RH",
-    data_geracao: formatNowBr(),
-    ano_referencia: String(filters.ano),
-    mes_referencia: filters.mes ? monthNamePtBr(filters.mes) : "TODOS OS MESES",
-    setor_filtro: filters.setor || "Todos",
-    categoria_filtro: filters.categoria || "Todas",
-    status_filtro: filters.status || "Todos",
-    tipo_extracao: filters.tipoExtracao || "SOMENTE_COM_FERIAS",
-    formato_saida: filters.formato || "DOCX",
-    total_registros: rows.length,
-    total_com_ferias: totalComFerias,
-    total_sem_ferias: totalSemFerias,
-    linhas: rows.map((row) => ({
-      ordem: row.ordem,
-      nome: row.nome,
-      matricula: row.matricula,
-      categoria: row.categoria,
-      setor: row.setor,
-      status: row.status,
-      cpf: row.cpf,
-      periodo1_inicio: row.periodo1_inicio,
-      periodo1_fim: row.periodo1_fim,
-      periodo2_inicio: row.periodo2_inicio,
-      periodo2_fim: row.periodo2_fim,
-      periodo3_inicio: row.periodo3_inicio,
-      periodo3_fim: row.periodo3_fim,
-    })),
-  };
+function chunkArray(items, size) {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
 }
 
-function renderDocx(context) {
-  const templatePath = resolveTemplatePath();
-  const content = fs.readFileSync(templatePath, "binary");
-  const zip = new PizZip(content);
+function buildTableRows(rows) {
+  if (!rows.length) {
+    return `
+      <tr>
+        <td class="cell center">1</td>
+        <td class="cell left">NENHUM REGISTRO ENCONTRADO</td>
+        <td class="cell center"></td>
+        <td class="cell center"></td>
+        <td class="cell center"></td>
+        <td class="cell center"></td>
+        <td class="cell center"></td>
+        <td class="cell center"></td>
+        <td class="cell center"></td>
+        <td class="cell center"></td>
+        <td class="cell signature">&nbsp;</td>
+      </tr>
+    `;
+  }
 
-  const doc = new Docxtemplater(zip, {
-    paragraphLoop: true,
-    linebreaks: true,
-    nullGetter() {
-      return "";
-    },
-  });
+  return rows
+    .map(
+      (row) => `
+        <tr>
+          <td class="cell center">${row.ordem}</td>
+          <td class="cell left">${escapeHtml(row.nome)}</td>
+          <td class="cell center">${escapeHtml(row.matricula)}</td>
+          <td class="cell center">${escapeHtml(row.exercicio)}</td>
+          <td class="cell center">${escapeHtml(row.periodo1_inicio)}</td>
+          <td class="cell center">${escapeHtml(row.periodo1_fim)}</td>
+          <td class="cell center">${escapeHtml(row.periodo2_inicio)}</td>
+          <td class="cell center">${escapeHtml(row.periodo2_fim)}</td>
+          <td class="cell center">${escapeHtml(row.periodo3_inicio)}</td>
+          <td class="cell center">${escapeHtml(row.periodo3_fim)}</td>
+          <td class="cell signature">&nbsp;</td>
+        </tr>
+      `
+    )
+    .join("\n");
+}
 
-  doc.render(context);
+function buildSection({ rows, filters, totalArquivo, pageIndex, totalPages }) {
+  const categoriaTitulo =
+    normalizeText(filters.categoria) === "TODAS" || normalizeText(filters.categoria) === "TODOS"
+      ? "SERVIDORES - TODAS AS CATEGORIAS"
+      : `SERVIDORES ${safeString(filters.categoria).toUpperCase()}`;
 
-  return doc.getZip().generate({
-    type: "nodebuffer",
-    compression: "DEFLATE",
-  });
+  const grupoCategoria =
+    normalizeText(filters.categoria) === "TODAS" || normalizeText(filters.categoria) === "TODOS"
+      ? "TODAS"
+      : safeString(filters.categoria).toUpperCase();
+
+  const setorLabel =
+    normalizeText(filters.setor) === "TODOS" ||
+    normalizeText(filters.setor) === "TODAS" ||
+    normalizeText(filters.setor) === "TODOS OS SETORES"
+      ? "TODOS OS SETORES"
+      : safeString(filters.setor).toUpperCase();
+
+  return `
+    <section class="sheet ${pageIndex < totalPages - 1 ? "page-break" : ""}">
+      <div class="header">
+        <div class="gov">GOVERNO DO ESTADO DE RORAIMA</div>
+        <div class="org">SECRETARIA DE ESTADO DO TRABALHO E BEM-ESTAR SOCIAL</div>
+        <div class="org">CENTRO INTEGRADO DE ATENÇÃO À PESSOA IDOSA - CIAPI</div>
+        <div class="title">PROGRAMAÇÃO ANUAL DE FÉRIAS - EXERCÍCIO/${escapeHtml(filters.ano)}</div>
+        <div class="subtitle">${escapeHtml(categoriaTitulo)}</div>
+      </div>
+
+      <div class="meta">
+        <div><strong>GRUPO/CATEGORIA:</strong> ${escapeHtml(grupoCategoria)}</div>
+        <div><strong>SETOR:</strong> ${escapeHtml(setorLabel)}</div>
+      </div>
+
+      <div class="summary">
+        <strong>Tipo:</strong> ${escapeHtml(filters.tipoExtracao)} &nbsp;&nbsp;
+        <strong>Status:</strong> ${escapeHtml(filters.status)} &nbsp;&nbsp;
+        <strong>Mês:</strong> ${escapeHtml(monthNamePtBr(filters.mes))} &nbsp;&nbsp;
+        <strong>Ordenação:</strong> ${escapeHtml(filters.ordenacao)}<br />
+        <strong>Linhas desta seção:</strong> ${rows.length} &nbsp;&nbsp;
+        <strong>Total do arquivo:</strong> ${totalArquivo} &nbsp;&nbsp;
+        <strong>Página:</strong> ${pageIndex + 1}/${totalPages}
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th rowspan="2" class="ncol">Nº</th>
+            <th rowspan="2">NOME DO SERVIDOR</th>
+            <th rowspan="2">MATRÍCULA</th>
+            <th rowspan="2">EXERCÍCIO</th>
+            <th colspan="2">1º PERÍODO</th>
+            <th colspan="2">2º PERÍODO</th>
+            <th colspan="2">3º PERÍODO</th>
+            <th rowspan="2" class="acol">ASSINATURA</th>
+          </tr>
+          <tr>
+            <th>INÍCIO</th>
+            <th>TÉRMINO</th>
+            <th>INÍCIO</th>
+            <th>TÉRMINO</th>
+            <th>INÍCIO</th>
+            <th>TÉRMINO</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${buildTableRows(rows)}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function buildHtmlDocument(rows, filters) {
+  const pages = chunkArray(rows, PAGE_SIZE);
+  const safePages = pages.length ? pages : [[]];
+
+  const sections = safePages
+    .map((pageRows, index) =>
+      buildSection({
+        rows: pageRows,
+        filters,
+        totalArquivo: rows.length,
+        pageIndex: index,
+        totalPages: safePages.length,
+      })
+    )
+    .join("\n");
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<title>Programação Anual de Férias</title>
+<style>
+  @page {
+    size: A4 landscape;
+    margin: 1.1cm;
+  }
+
+  body {
+    font-family: Arial, Helvetica, sans-serif;
+    color: #000;
+    margin: 0;
+    padding: 0;
+    font-size: 10pt;
+    background: #fff;
+  }
+
+  .sheet {
+    width: 100%;
+  }
+
+  .page-break {
+    page-break-after: always;
+  }
+
+  .header {
+    text-align: center;
+    margin-bottom: 10px;
+  }
+
+  .gov { font-size: 11pt; font-weight: 700; }
+  .org { font-size: 9pt; font-weight: 700; }
+  .title {
+    margin-top: 8px;
+    font-size: 12pt;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .subtitle {
+    margin-top: 4px;
+    font-size: 10pt;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 10px 0;
+    font-size: 9pt;
+    font-weight: 700;
+  }
+
+  .summary {
+    margin-bottom: 10px;
+    border: 1px solid #000;
+    padding: 8px;
+    font-size: 8.5pt;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr {
+    page-break-inside: avoid;
+  }
+
+  th, td {
+    border: 1px solid #000;
+    padding: 4px;
+    vertical-align: middle;
+  }
+
+  th {
+    background: #efefef;
+    text-align: center;
+    font-size: 8.8pt;
+  }
+
+  .cell { font-size: 8.8pt; }
+  .left { text-align: left; }
+  .center { text-align: center; }
+  .signature { height: 22px; }
+  .ncol { width: 28px; }
+  .acol { width: 110px; }
+</style>
+</head>
+<body>
+${sections}
+</body>
+</html>`;
 }
 
 async function exportarFeriasTemplate(payload = {}) {
-  const requestData = pickRequestData(payload);
-  const filters = normalizeFilters(requestData);
+  const rawFilters = pickRequestData(payload);
+  const filters = normalizeFilters(rawFilters);
 
-  const [servidores, ferias] = await Promise.all([fetchServidores(), fetchFerias()]);
+  const [servidores, ferias] = await Promise.all([
+    fetchServidores(),
+    fetchFerias(),
+  ]);
+
   const index = buildServidoresIndex(servidores);
 
   const feriasByCpf = new Map();
@@ -564,7 +646,7 @@ async function exportarFeriasTemplate(payload = {}) {
 
   for (const item of ferias) {
     const cpf = onlyDigits(
-      item?.servidor_cpf || item?.cpf || item?.cpf_servidor || item?.documento
+      item?.servidor_cpf || item?.cpf || item?.cpf_servidor
     );
     const nome = normalizeText(
       item?.nome || item?.nome_servidor || item?.servidor_nome || item?.servidor
@@ -587,39 +669,38 @@ async function exportarFeriasTemplate(payload = {}) {
       (nome && feriasByNome.get(nome)) ||
       null;
 
-    mergedRows.push(mergeServidorFerias(servidor, feriasRow, filters));
+    mergedRows.push(buildMergedRow(servidor, feriasRow, filters));
   }
 
   for (const feriasRow of ferias) {
     const servidorEncontrado = resolveServidorFromFerias(feriasRow, index);
     if (servidorEncontrado) continue;
-
-    mergedRows.push(mergeServidorFerias(null, feriasRow, filters));
+    mergedRows.push(buildMergedRow(null, feriasRow, filters));
   }
 
   const filteredRows = applyFilters(mergedRows, filters);
-  const context = buildContext(filteredRows, filters);
-  const buffer = renderDocx(context);
+  const html = buildHtmlDocument(filteredRows, filters);
 
-  const fileNameParts = ["programacao_ferias"];
+  const categoriaSlug =
+    normalizeText(filters.categoria)
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .replace(/[^\w]/g, "") || "todas";
 
-  if (filters.mes) {
-    fileNameParts.push(String(filters.mes).padStart(2, "0"));
-  } else {
-    fileNameParts.push("todos_os_meses");
-  }
+  const setorSlug =
+    normalizeText(filters.setor)
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .replace(/[^\w]/g, "") || "todos_setores";
 
-  fileNameParts.push(String(filters.ano));
+  const mesSlug = filters.mes ? monthNamePtBr(filters.mes).toLowerCase() : "todos_meses";
 
   return {
-    buffer,
-    fileName: `${fileNameParts.join("_")}.docx`,
-    contentType:
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    buffer: Buffer.from("\uFEFF" + html, "utf8"),
+    fileName: `ferias_${filters.ano}_${categoriaSlug}_${setorSlug}_${mesSlug}.doc`,
+    contentType: "application/msword",
     meta: {
-      totalRegistros: context.total_registros,
-      totalComFerias: context.total_com_ferias,
-      totalSemFerias: context.total_sem_ferias,
+      totalRegistros: filteredRows.length,
       filtros: filters,
     },
   };
