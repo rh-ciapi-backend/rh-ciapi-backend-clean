@@ -1,44 +1,55 @@
+'use strict';
+
 const express = require('express');
 const { exportarFrequencia } = require('../services/frequenciaExportService');
 
 const router = express.Router();
 
-router.post('/exportar/:formato', async (req, res) => {
-  try {
-    const formato = String(req.params.formato || '').toLowerCase();
+router.get('/exportar/health', async (_req, res) => {
+  return res.json({
+    ok: true,
+    route: '/api/frequencia/exportar',
+    method: 'POST'
+  });
+});
 
-    if (!['docx', 'pdf', 'csv'].includes(formato)) {
+router.post('/exportar', async (req, res) => {
+  try {
+    const {
+      templateData,
+      formato,
+      templatePath,
+      outputFileName,
+      removerLinhasExcedentes
+    } = req.body || {};
+
+    if (!templateData || typeof templateData !== 'object') {
       return res.status(400).json({
         ok: false,
-        error: 'Formato inválido. Use docx, pdf ou csv.',
+        error: 'templateData é obrigatório para exportar a frequência.'
       });
     }
 
-    const resultado = await exportarFrequencia({
+    const result = await exportarFrequencia({
+      templateData,
       formato,
-      body: req.body || {},
+      templatePath,
+      outputFileName,
+      removerLinhasExcedentes: removerLinhasExcedentes !== false
     });
 
-    if (resultado.kind === 'json') {
-      return res.status(resultado.statusCode || 200).json(resultado.payload);
-    }
+    res.setHeader('Content-Type', result.mimeType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(result.filename)}"`
+    );
 
-    if (resultado.kind === 'download') {
-      res.setHeader('Content-Type', resultado.contentType);
-      res.setHeader('Content-Disposition', `attachment; filename="${resultado.fileName}"`);
-      return res.sendFile(resultado.filePath);
-    }
-
-    return res.status(500).json({
-      ok: false,
-      error: 'Resposta de exportação inválida.',
-    });
+    return res.send(result.buffer);
   } catch (error) {
-    console.error('[frequenciaExportRoutes] erro:', error);
     return res.status(500).json({
       ok: false,
-      error: 'Erro interno ao exportar frequência',
-      details: error?.message || String(error),
+      error: 'Falha ao exportar frequência',
+      details: error?.message || 'Erro interno'
     });
   }
 });
