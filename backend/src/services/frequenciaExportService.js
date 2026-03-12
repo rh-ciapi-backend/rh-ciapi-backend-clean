@@ -1,99 +1,168 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
-const {
-  sanitizeFilename,
-  resolveTemplatePath,
-  readDocxBuffer,
-  removeExcessRowsFromDocxBuffer,
-  renderDocxTemplate,
-  convertDocxBufferToPdf,
-  saveOutputBuffer
-} = require('../utils/frequenciaDocxHelper');
+const os = require('os');
+const { execFile } = require('child_process');
+const PizZip = require('pizzip');
+const Docxtemplater = require('docxtemplater');
 
-function normalizeFormato(value) {
-  const raw = String(value || 'docx').trim().toLowerCase();
-  return raw === 'pdf' ? 'pdf' : 'docx';
+function execFileAsync(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, options, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
 }
 
-function normalizeTemplateData(templateData) {
-  return templateData && typeof templateData === 'object' ? templateData : {};
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+  return dirPath;
 }
 
-function buildDefaultOutputFileName(templateData, formato) {
-  const nome = String(templateData.NOME || 'servidor').trim();
-  const mes = String(templateData.MES_NUMERO || '').trim() || String(templateData.MES || 'MES').trim();
-  const ano = String(templateData.ANO || 'ANO').trim();
-
-  const base = sanitizeFilename(`frequencia_${nome}_${mes}_${ano}`) || 'frequencia';
-  return `${base}.${formato}`;
+function sanitizeFileName(value, extension) {
+  const base = String(value || 'frequencia')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'frequencia';
+  const ext = extension.startsWith('.') ? extension : `.${extension}`;
+  return base.toLowerCase().endsWith(ext.toLowerCase()) ? base : `${base}${ext}`;
 }
 
-function getLastDayFromTemplateData(templateData) {
-  const n = Number(templateData.LAST_DAY || 31);
-  return Number.isFinite(n) && n >= 1 && n <= 31 ? n : 31;
+function firstExisting(paths) {
+  for (const p of paths) {
+    if (p && fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+function resolveTemplatePath(customPath) {
+  const cwd = process.cwd();
+  const candidates = [
+    customPath,
+    process.env.FREQUENCIA_TEMPLATE_PATH,
+    path.join(cwd, 'templates', 'modelo_frequencia.docx'),
+    path.join(cwd, 'backend', 'templates', 'modelo_frequencia.docx'),
+    path.join(cwd, 'src', 'templates', 'modelo_frequencia.docx'),
+    path.join(cwd, 'modelo_frequencia.docx')
+  ].filter(Boolean);
+
+  const resolved = firstExisting(candidates);
+  if (!resolved) {
+    throw new Error(
+      `Template DOCX de frequência não encontrado. Caminhos verificados: ${candidates.join(' | ')}`
+    );
+  }
+  return resolved;
+}
+
+function renderDocxBuffer(templatePath, templateData) {
+  const content = fs.readFileSync(templatePath, 'binary');
+  const zip = new PizZip(content);
+  const doc = new Docxtemplater(zip, {
+    paragraphLoop: true,
+    linebreaks: true,
+    nullGetter() {
+      return '';
+    }
+  });
+
+  try {
+    doc.render(templateData || {});
+  } catch (error) {
+    const details = error?.properties?.errors
+      ? error.properties.errors.map((e) => e.properties?.explanation || e.name).join(' | ')
+      : error?.message;
+    throw new Error(`Falha ao preencher o template DOCX da frequência: ${details || 'erro desconhecido'}`);
+  }
+
+  return doc.getZip().generate({ type: 'nodebuffer' });
+}
+
+async function convertDocxBufferToPdfBuffer(docxBuffer, basename) {
+  const soffice = process.env.SOFFICE_BINARY || 'soffice';
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ciapi-freq-'));
+  const inputDir = ensureDir(path.join(tempRoot, 'input'));
+  const outputDir = ensureDir(path.join(tempRoot, 'output'));
+  const docxName = sanitizeFileName(basename, '.docx');
+  const pdfName = sanitizeFileName(basename, '.pdf');
+  const inputPath = path.join(inputDir, docxName);
+  const outputPath = path.join(outputDir, pdfName);
+
+  fs.writeFileSync(inputPath, docxBuffer);
+
+  try {
+    await execFileAsync(soffice, [
+      '--headless',
+      '--convert-to',
+      'pdf',
+      '--outdir',
+      outputDir,
+      inputPath
+    ], { timeout: 120000 });
+  } catch (error) {
+    const stderr = String(error?.stderr || '').trim();
+    const stdout = String(error?.stdout || '').trim();
+    throw new Error(
+      `Não foi possível converter a frequência para PDF. Verifique se o LibreOffice/soffice está disponível no servidor. ${stderr || stdout || error.message}`.trim()
+    );
+  }
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error('A conversão para PDF foi executada, mas o arquivo PDF não foi gerado.');
+  }
+
+  return fs.readFileSync(outputPath);
 }
 
 async function exportarFrequencia({
   templateData,
-  formato,
+  formato = 'docx',
   templatePath,
   outputFileName,
   removerLinhasExcedentes = true
 }) {
-  const safeFormato = normalizeFormato(formato);
-  const safeTemplateData = normalizeTemplateData(templateData);
-  const lastDay = getLastDayFromTemplateData(safeTemplateData);
-
-  const resolvedTemplatePath = resolveTemplatePath(templatePath);
-  let templateBuffer = readDocxBuffer(resolvedTemplatePath);
-
-  if (removerLinhasExcedentes) {
-    templateBuffer = removeExcessRowsFromDocxBuffer(templateBuffer, lastDay);
+  if (!templateData || typeof templateData !== 'object') {
+    throw new Error('templateData é obrigatório.');
   }
 
-  const docxBuffer = renderDocxTemplate(templateBuffer, safeTemplateData);
+  const resolvedTemplatePath = resolveTemplatePath(templatePath);
+  const resolvedFormat = String(formato || 'docx').trim().toLowerCase();
+  if (!['docx', 'pdf'].includes(resolvedFormat)) {
+    throw new Error(`Formato inválido para exportação da frequência: ${formato}`);
+  }
 
-  const finalFileName = sanitizeFilename(
-    outputFileName || buildDefaultOutputFileName(safeTemplateData, safeFormato)
-  ) || `frequencia.${safeFormato}`;
+  // manter compatibilidade com payload existente, mesmo que o corte real de linhas
+  // seja feito no builder/template via placeholders em branco.
+  void removerLinhasExcedentes;
 
-  const exportDir =
-    process.env.EXPORT_DIR
-      ? path.join(process.env.EXPORT_DIR, 'frequencia')
-      : path.resolve(process.cwd(), 'backend/exports/frequencia');
+  const baseName = sanitizeFileName(outputFileName || 'frequencia', resolvedFormat === 'pdf' ? '.pdf' : '.docx')
+    .replace(/\.(docx|pdf)$/i, '');
 
-  if (safeFormato === 'pdf') {
-    const pdfBuffer = await convertDocxBufferToPdf(docxBuffer);
-    const pdfFileName = finalFileName.endsWith('.pdf')
-      ? finalFileName
-      : finalFileName.replace(/\.docx$/i, '') + '.pdf';
+  const docxBuffer = renderDocxBuffer(resolvedTemplatePath, templateData);
 
-    const absolutePath = saveOutputBuffer(exportDir, pdfFileName, pdfBuffer);
-
+  if (resolvedFormat === 'docx') {
     return {
       ok: true,
-      formato: 'pdf',
-      filename: pdfFileName,
-      absolutePath,
-      mimeType: 'application/pdf',
-      buffer: pdfBuffer
+      filename: sanitizeFileName(baseName, '.docx'),
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: docxBuffer
     };
   }
 
-  const docxFileName = finalFileName.endsWith('.docx')
-    ? finalFileName
-    : finalFileName.replace(/\.pdf$/i, '') + '.docx';
-
-  const absolutePath = saveOutputBuffer(exportDir, docxFileName, docxBuffer);
-
+  const pdfBuffer = await convertDocxBufferToPdfBuffer(docxBuffer, baseName);
   return {
     ok: true,
-    formato: 'docx',
-    filename: docxFileName,
-    absolutePath,
-    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    buffer: docxBuffer
+    filename: sanitizeFileName(baseName, '.pdf'),
+    mimeType: 'application/pdf',
+    buffer: pdfBuffer
   };
 }
 
