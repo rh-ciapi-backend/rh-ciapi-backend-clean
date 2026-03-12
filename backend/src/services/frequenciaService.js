@@ -1,127 +1,238 @@
-const express = require('express');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const path = require('path');
-const fs = require('fs');
-const { createClient } = require('@supabase/supabase-js');
-
-dotenv.config();
-
-const feriasExportRoutes = require('./src/routes/feriasExportRoutes');
-const frequenciaRoutes = require('./src/routes/frequenciaRoutes');
-const frequenciaExportRoutes = require('./src/routes/frequenciaExportRoutes');
-
-const app = express();
-
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-const corsOrigins = (process.env.CORS_ORIGINS || '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-app.use(
-  cors({
-    origin(origin, cb) {
-      if (!origin) return cb(null, true);
-      if (corsOrigins.length === 0) return cb(null, true);
-      if (corsOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error(`CORS bloqueado: ${origin}`));
-    },
-    credentials: true
-  })
-);
-
-const PORT = process.env.PORT || 5000;
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-  console.warn('SUPABASE_URL ou SUPABASE_SERVICE_KEY não configurados.');
+function onlyNumbers(value) {
+  return String(value || "").replace(/\D/g, "");
 }
 
-const supabase = createClient(SUPABASE_URL || '', SUPABASE_SERVICE_KEY || '');
-app.locals.supabase = supabase;
+function toIsoDate(year, month, day) {
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(day);
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
 
-const exportDir = process.env.EXPORT_DIR || path.join('/tmp', 'exports');
-try {
-  if (!fs.existsSync(exportDir)) {
-    fs.mkdirSync(exportDir, { recursive: true });
+function getDaysInMonth(year, month) {
+  return new Date(Number(year), Number(month), 0).getDate();
+}
+
+function normalizeTipo(tipo) {
+  const raw = String(tipo || "").trim().toUpperCase();
+  if (raw === "FALTA") return "FALTA";
+  if (raw === "ATESTADO") return "ATESTADO";
+  if (raw === "FERIADO") return "FERIADO";
+  if (raw === "PONTO") return "PONTO";
+  if (raw === "PONTO FACULTATIVO") return "PONTO FACULTATIVO";
+  if (raw === "FÉRIAS" || raw === "FERIAS") return "FERIAS";
+  if (raw === "ANIVERSÁRIO" || raw === "ANIVERSARIO") return "ANIVERSARIO";
+  return raw || "EVENTO";
+}
+
+async function listarServidores(supabase, servidorCpf) {
+  let query = supabase.from("servidores").select("*").order("nome", { ascending: true });
+
+  if (servidorCpf) {
+    const cpf = onlyNumbers(servidorCpf);
+    query = query.eq("cpf", cpf);
   }
-  app.locals.exportDir = exportDir;
-} catch (err) {
-  console.warn('Não foi possível preparar EXPORT_DIR:', String(err));
+
+  const { data, error } = await query;
+  if (error) throw new Error(`Erro ao listar servidores: ${error.message}`);
+  return Array.isArray(data) ? data : [];
 }
 
-app.get('/', (_req, res) => {
-  res.status(200).send('RH CIAPI Backend OK');
-});
+async function listarOcorrencias(supabase, ano, mes, servidorCpf) {
+  const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
+  const fim = `${ano}-${String(mes).padStart(2, "0")}-${String(getDaysInMonth(ano, mes)).padStart(2, "0")}`;
 
-app.get('/health', (_req, res) => {
-  res.status(200).json({
-    ok: true,
-    service: 'rh-ciapi-backend',
-    time: new Date().toISOString()
-  });
-});
+  let query = supabase
+    .from("faltas")
+    .select("*")
+    .gte("data", inicio)
+    .lte("data", fim);
 
-app.get('/api/servidores', async (_req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('servidores')
-      .select('*')
-      .limit(1000);
+  if (servidorCpf) {
+    query = query.eq("cpf", onlyNumbers(servidorCpf));
+  }
 
-    if (error) {
-      return res.status(400).json({
-        ok: false,
-        error: error.message
+  const { data, error } = await query;
+  if (error) {
+    return [];
+  }
+
+  return Array.isArray(data) ? data : [];
+}
+
+async function listarEventos(supabase, ano, mes) {
+  const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
+  const fim = `${ano}-${String(mes).padStart(2, "0")}-${String(getDaysInMonth(ano, mes)).padStart(2, "0")}`;
+
+  const { data, error } = await supabase
+    .from("eventos")
+    .select("*")
+    .gte("data", inicio)
+    .lte("data", fim);
+
+  if (error) {
+    return [];
+  }
+
+  return Array.isArray(data) ? data : [];
+}
+
+async function listarFerias(supabase, servidorCpf) {
+  let query = supabase.from("ferias").select("*");
+
+  if (servidorCpf) {
+    query = query.eq("servidor_cpf", onlyNumbers(servidorCpf));
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    return [];
+  }
+
+  return Array.isArray(data) ? data : [];
+}
+
+function buildMonthData({ ano, mes, servidores, ocorrencias, eventos, ferias }) {
+  const diasNoMes = getDaysInMonth(ano, mes);
+
+  return servidores.map((servidor) => {
+    const cpf = onlyNumbers(servidor.cpf);
+    const itens = [];
+
+    for (let dia = 1; dia <= diasNoMes; dia += 1) {
+      const dataIso = toIsoDate(ano, mes, dia);
+
+      const ocorrenciasDia = ocorrencias.filter((o) => onlyNumbers(o.cpf) === cpf && String(o.data).slice(0, 10) === dataIso);
+      const eventosDia = eventos.filter((e) => String(e.data).slice(0, 10) === dataIso);
+
+      const feriasDia = ferias.some((f) => {
+        if (onlyNumbers(f.servidor_cpf) !== cpf) return false;
+
+        const periodos = [
+          [f.periodo1_inicio, f.periodo1_fim],
+          [f.periodo2_inicio, f.periodo2_fim],
+          [f.periodo3_inicio, f.periodo3_fim],
+        ];
+
+        return periodos.some(([ini, fim]) => {
+          if (!ini || !fim) return false;
+          const d = dataIso;
+          return d >= String(ini).slice(0, 10) && d <= String(fim).slice(0, 10);
+        });
+      });
+
+      itens.push({
+        dia,
+        data: dataIso,
+        ocorrencias: ocorrenciasDia.map((o) => ({
+          id: o.id || null,
+          tipo: normalizeTipo(o.tipo),
+          turno: o.turno || "",
+          observacao: o.observacao || "",
+        })),
+        eventos: eventosDia.map((e) => ({
+          id: e.id || null,
+          tipo: normalizeTipo(e.tipo),
+          titulo: e.titulo || e.nome || "",
+          descricao: e.descricao || "",
+        })),
+        ferias: feriasDia,
       });
     }
 
-    return res.status(200).json({
-      ok: true,
-      data: Array.isArray(data) ? data : []
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-});
-
-app.use('/api/ferias', feriasExportRoutes);
-app.use('/api/frequencia', frequenciaRoutes);
-app.use('/api/frequencia', frequenciaExportRoutes);
-
-app.use((req, res) => {
-  return res.status(404).json({
-    ok: false,
-    error: `Rota não encontrada: ${req.method} ${req.originalUrl}`
+    return {
+      servidor: {
+        id: servidor.id || servidor.servidor || null,
+        nome: servidor.nome || servidor.nome_completo || "",
+        cpf,
+        matricula: servidor.matricula || "",
+        cargo: servidor.cargo || "",
+        categoria: servidor.categoria || "",
+        setor: servidor.setor || "",
+        status: servidor.status || "ATIVO",
+      },
+      dias: itens,
+    };
   });
-});
+}
 
-app.use((err, _req, res, next) => {
-  console.error('Erro no backend:', err);
-
-  if (res.headersSent) {
-    return next(err);
+async function listarFrequenciaMensal({ supabase, ano, mes, servidorCpf }) {
+  if (!supabase) {
+    throw new Error("Cliente Supabase não disponível.");
   }
 
-  return res.status(500).json({
-    ok: false,
-    error: err instanceof Error ? err.message : 'Erro interno inesperado no servidor.'
-  });
-});
+  if (!ano || !mes) {
+    throw new Error("Parâmetros ano e mes são obrigatórios.");
+  }
 
-app.listen(PORT, () => {
-  console.log(`Backend rodando na porta ${PORT}`);
-  console.log('Health: /health');
-  console.log('Servidores: GET /api/servidores');
-  console.log('Frequência: GET /api/frequencia');
-  console.log('Exportação de frequência: POST /api/frequencia/exportar');
-  console.log('Exportação de frequência: POST /api/frequencia/exportar/:formato');
-  console.log('Exportação de férias: POST /api/ferias/exportar');
-});
+  const servidores = await listarServidores(supabase, servidorCpf);
+  const ocorrencias = await listarOcorrencias(supabase, ano, mes, servidorCpf);
+  const eventos = await listarEventos(supabase, ano, mes);
+  const ferias = await listarFerias(supabase, servidorCpf);
+
+  return buildMonthData({
+    ano,
+    mes,
+    servidores,
+    ocorrencias,
+    eventos,
+    ferias,
+  });
+}
+
+async function registrarOcorrenciaFrequencia({ supabase, payload }) {
+  if (!supabase) throw new Error("Cliente Supabase não disponível.");
+
+  const row = {
+    cpf: onlyNumbers(payload.cpf),
+    data: payload.data,
+    tipo: normalizeTipo(payload.tipo),
+    turno: payload.turno || null,
+    observacao: payload.observacao || null,
+  };
+
+  const { data, error } = await supabase.from("faltas").insert(row).select().single();
+
+  if (error) throw new Error(`Erro ao registrar ocorrência: ${error.message}`);
+  return data;
+}
+
+async function editarOcorrenciaFrequencia({ supabase, id, payload }) {
+  if (!supabase) throw new Error("Cliente Supabase não disponível.");
+
+  const row = {
+    cpf: payload.cpf ? onlyNumbers(payload.cpf) : undefined,
+    data: payload.data,
+    tipo: payload.tipo ? normalizeTipo(payload.tipo) : undefined,
+    turno: payload.turno,
+    observacao: payload.observacao,
+  };
+
+  Object.keys(row).forEach((key) => row[key] === undefined && delete row[key]);
+
+  const { data, error } = await supabase
+    .from("faltas")
+    .update(row)
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) throw new Error(`Erro ao editar ocorrência: ${error.message}`);
+  return data;
+}
+
+async function excluirOcorrenciaFrequencia({ supabase, id }) {
+  if (!supabase) throw new Error("Cliente Supabase não disponível.");
+
+  const { error } = await supabase.from("faltas").delete().eq("id", id);
+
+  if (error) throw new Error(`Erro ao excluir ocorrência: ${error.message}`);
+  return { id };
+}
+
+module.exports = {
+  listarFrequenciaMensal,
+  registrarOcorrenciaFrequencia,
+  editarOcorrenciaFrequencia,
+  excluirOcorrenciaFrequencia,
+};
