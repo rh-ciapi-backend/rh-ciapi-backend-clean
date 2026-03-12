@@ -1,353 +1,127 @@
-'use strict';
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const path = require('path');
+const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
 
-const {
-  buildMonthlyDayMap,
-  buildTemplateDataFromDayMap,
-  dateToISO
-} = require('../utils/frequenciaDayMap');
+dotenv.config();
 
-function upper(value) {
-  return String(value || '').trim().toUpperCase();
-}
+const feriasExportRoutes = require('./src/routes/feriasExportRoutes');
+const frequenciaRoutes = require('./src/routes/frequenciaRoutes');
+const frequenciaExportRoutes = require('./src/routes/frequenciaExportRoutes');
 
-function pad2(value) {
-  return String(value).padStart(2, '0');
-}
+const app = express();
 
-function monthNamePtBr(month) {
-  const names = [
-    '',
-    'JANEIRO',
-    'FEVEREIRO',
-    'MARÇO',
-    'ABRIL',
-    'MAIO',
-    'JUNHO',
-    'JULHO',
-    'AGOSTO',
-    'SETEMBRO',
-    'OUTUBRO',
-    'NOVEMBRO',
-    'DEZEMBRO'
-  ];
-  return names[Number(month)] || '';
-}
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-function asArray(value) {
-  return Array.isArray(value) ? value : [];
-}
+const corsOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
-function normalizeServidor(servidor = {}) {
-  return {
-    id: servidor.id || servidor.servidor || servidor.uuid || '',
-    nome:
-      servidor.nomeCompleto ||
-      servidor.nome_completo ||
-      servidor.nome ||
-      servidor.servidor_nome ||
-      '',
-    matricula: servidor.matricula || '',
-    cpf: servidor.cpf || '',
-    cargo: servidor.cargo || servidor.funcao || '',
-    categoria: servidor.categoria || '',
-    setor: servidor.setor || servidor.lotacao || '',
-    chDiaria:
-      servidor.chDiaria ||
-      servidor.ch_diaria ||
-      servidor.cargaHorariaDiaria ||
-      '',
-    chSemanal:
-      servidor.chSemanal ||
-      servidor.ch_semanal ||
-      servidor.cargaHorariaSemanal ||
-      ''
-  };
-}
-
-function normalizeFeriasInput(ferias = []) {
-  return asArray(ferias)
-    .flatMap((item) => {
-      const result = [];
-
-      const p1i = item?.periodo1_inicio || item?.inicio || item?.data_inicio || item?.startDate;
-      const p1f = item?.periodo1_fim || item?.fim || item?.data_fim || item?.endDate;
-      const p2i = item?.periodo2_inicio;
-      const p2f = item?.periodo2_fim;
-      const p3i = item?.periodo3_inicio;
-      const p3f = item?.periodo3_fim;
-
-      if (p1i && p1f) {
-        result.push({
-          inicio: p1i,
-          fim: p1f,
-          tipo: 'FERIAS',
-          observacao: item?.observacao || 'Férias'
-        });
-      }
-
-      if (p2i && p2f) {
-        result.push({
-          inicio: p2i,
-          fim: p2f,
-          tipo: 'FERIAS',
-          observacao: item?.observacao || 'Férias'
-        });
-      }
-
-      if (p3i && p3f) {
-        result.push({
-          inicio: p3i,
-          fim: p3f,
-          tipo: 'FERIAS',
-          observacao: item?.observacao || 'Férias'
-        });
-      }
-
-      return result;
-    });
-}
-
-function normalizeAtestadosInput(atestados = []) {
-  return asArray(atestados).map((item) => ({
-    inicio:
-      item?.inicio ||
-      item?.data_inicio ||
-      item?.periodo_inicio ||
-      item?.dataInicial,
-    fim:
-      item?.fim ||
-      item?.data_fim ||
-      item?.periodo_fim ||
-      item?.dataFinal,
-    tipo: 'ATESTADO',
-    observacao: item?.observacao || item?.motivo || 'Atestado'
-  }));
-}
-
-function normalizeFaltasInput(faltas = []) {
-  return asArray(faltas).map((item) => ({
-    data: item?.data || item?.date || item?.dataISO,
-    inicio: item?.inicio || item?.data_inicio,
-    fim: item?.fim || item?.data_fim,
-    turno: item?.turno || '',
-    tipo: 'FALTA',
-    observacao: item?.observacao || item?.descricao || 'Falta'
-  }));
-}
-
-function normalizeEventosInput(eventos = []) {
-  return asArray(eventos).map((item) => ({
-    data: item?.data || item?.date || item?.dataISO,
-    tipo: upper(item?.tipo || item?.type),
-    titulo: item?.titulo || item?.title || '',
-    descricao: item?.descricao || item?.description || ''
-  }));
-}
-
-function normalizeOcorrenciasManuaisInput(ocorrencias = []) {
-  return asArray(ocorrencias).map((item) => ({
-    data: item?.data || item?.date || item?.dataISO,
-    rubrica: item?.rubrica || '',
-    rubrica1: item?.rubrica1 || '',
-    rubrica2: item?.rubrica2 || '',
-    ocorrencia1: item?.ocorrencia1 || item?.o1 || '',
-    ocorrencia2: item?.ocorrencia2 || item?.o2 || '',
-    observacoes: item?.observacoes || item?.observacao || ''
-  }));
-}
-
-function buildCabecalhoPlaceholders({ servidor, year, month }) {
-  const s = normalizeServidor(servidor);
-
-  return {
-    ANO: String(year),
-    MES: monthNamePtBr(month),
-    MES_NUMERO: pad2(month),
-    NOME: s.nome || '',
-    NOME_COMPLETO: s.nome || '',
-    MATRICULA: s.matricula || '',
-    CPF: s.cpf || '',
-    CARGO: s.cargo || '',
-    CATEGORIA: s.categoria || '',
-    SETOR: s.setor || '',
-    CH_DIARIA: s.chDiaria ? `CH_DIARIA: ${s.chDiaria}` : '',
-    CH_SEMANAL: s.chSemanal ? `CH_SEMANAL: ${s.chSemanal}` : '',
-    C_H_DIARIA: s.chDiaria || '',
-    C_H_SEMANAL: s.chSemanal || ''
-  };
-}
-
-function montarEstadoMensalServidor({
-  servidor,
-  year,
-  month,
-  eventos = [],
-  ferias = [],
-  atestados = [],
-  faltas = [],
-  ocorrenciasManuais = [],
-  includePontoFacultativo = false,
-  faltaNaRubrica = true
-}) {
-  const feriasNormalizadas = normalizeFeriasInput(ferias);
-  const atestadosNormalizados = normalizeAtestadosInput(atestados);
-  const faltasNormalizadas = normalizeFaltasInput(faltas);
-  const eventosNormalizados = normalizeEventosInput(eventos);
-  const manuaisNormalizados = normalizeOcorrenciasManuaisInput(ocorrenciasManuais);
-
-  const monthlyMap = buildMonthlyDayMap({
-    year,
-    month,
-    events: eventosNormalizados,
-    vacations: feriasNormalizadas,
-    atestados: atestadosNormalizados,
-    faltas: faltasNormalizadas,
-    manualEntries: manuaisNormalizados,
-    includePontoFacultativo,
-    faltaNaRubrica,
-    priority: [
-      'SABADO',
-      'DOMINGO',
-      'FERIADO',
-      'FERIAS',
-      'ATESTADO',
-      'FALTA',
-      'PONTO_FACULTATIVO',
-      'MANUAL'
-    ]
-  });
-
-  return {
-    servidor: normalizeServidor(servidor),
-    year,
-    month,
-    lastDay: monthlyMap.lastDay,
-    hiddenRowsFrom: monthlyMap.hiddenRowsFrom,
-    hiddenRowsTo: monthlyMap.hiddenRowsTo,
-    dayMap: monthlyMap.dayMap
-  };
-}
-
-function montarContextoTemplateFrequencia({
-  servidor,
-  year,
-  month,
-  eventos = [],
-  ferias = [],
-  atestados = [],
-  faltas = [],
-  ocorrenciasManuais = [],
-  includePontoFacultativo = false,
-  faltaNaRubrica = true
-}) {
-  const estadoMensal = montarEstadoMensalServidor({
-    servidor,
-    year,
-    month,
-    eventos,
-    ferias,
-    atestados,
-    faltas,
-    ocorrenciasManuais,
-    includePontoFacultativo,
-    faltaNaRubrica
-  });
-
-  const cabecalho = buildCabecalhoPlaceholders({
-    servidor,
-    year,
-    month
-  });
-
-  const daysContext = buildTemplateDataFromDayMap(
-    {
-      lastDay: estadoMensal.lastDay,
-      dayMap: estadoMensal.dayMap
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      if (corsOrigins.length === 0) return cb(null, true);
+      if (corsOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error(`CORS bloqueado: ${origin}`));
     },
-    {
-      keepWeekdayLabel: true,
-      includeVisibilityFlags: true,
-      fillBlankDaysUpTo31: true
-    }
-  );
+    credentials: true
+  })
+);
 
-  return {
-    ...cabecalho,
-    ...daysContext,
-    LAST_DAY: estadoMensal.lastDay,
-    HIDDEN_ROWS_FROM: estadoMensal.hiddenRowsFrom <= 31 ? estadoMensal.hiddenRowsFrom : '',
-    HIDDEN_ROWS_TO: estadoMensal.hiddenRowsTo <= 31 ? estadoMensal.hiddenRowsTo : '',
-    MONTH_IS_COMPLETE_31: estadoMensal.lastDay === 31
-  };
+const PORT = process.env.PORT || 5000;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  console.warn('SUPABASE_URL ou SUPABASE_SERVICE_KEY não configurados.');
 }
 
-function montarResumoInstitucionalDia(item) {
-  if (!item) return null;
+const supabase = createClient(SUPABASE_URL || '', SUPABASE_SERVICE_KEY || '');
+app.locals.supabase = supabase;
 
-  return {
-    dia: item.dia,
-    dataISO: item.dataISO,
-    weekdayLabel: item.weekdayLabel,
-    statusFinal: item.finalStatus,
-    rubrica: item.rubrica,
-    ocorrencia1: item.ocorrencia1,
-    ocorrencia2: item.ocorrencia2,
-    observacoes: item.observacoes
-  };
+const exportDir = process.env.EXPORT_DIR || path.join('/tmp', 'exports');
+try {
+  if (!fs.existsSync(exportDir)) {
+    fs.mkdirSync(exportDir, { recursive: true });
+  }
+  app.locals.exportDir = exportDir;
+} catch (err) {
+  console.warn('Não foi possível preparar EXPORT_DIR:', String(err));
 }
 
-function montarDiagnosticoMensal(estadoMensal) {
-  const linhas = [];
-  const dayMap = estadoMensal?.dayMap || {};
+app.get('/', (_req, res) => {
+  res.status(200).send('RH CIAPI Backend OK');
+});
 
-  Object.keys(dayMap)
-    .map(Number)
-    .sort((a, b) => a - b)
-    .forEach((dia) => {
-      const item = dayMap[dia];
-      linhas.push(montarResumoInstitucionalDia(item));
-    });
-
-  return {
-    servidor: estadoMensal?.servidor?.nome || '',
-    ano: estadoMensal?.year || '',
-    mes: estadoMensal?.month || '',
-    ultimoDia: estadoMensal?.lastDay || '',
-    linhas
-  };
-}
-
-function filtrarRegistrosDoMes(registros = [], year, month, dateFieldNames = ['data', 'date', 'dataISO']) {
-  const prefix = `${year}-${pad2(month)}-`;
-
-  return asArray(registros).filter((item) => {
-    for (const field of dateFieldNames) {
-      const iso = dateToISO(item?.[field]);
-      if (iso && iso.startsWith(prefix)) return true;
-    }
-
-    const inicio = dateToISO(item?.inicio || item?.data_inicio || item?.start || item?.periodo1_inicio);
-    const fim = dateToISO(item?.fim || item?.data_fim || item?.end || item?.periodo1_fim);
-
-    if (inicio && fim) {
-      const firstOfMonth = `${year}-${pad2(month)}-01`;
-      const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-      const lastOfMonth = `${year}-${pad2(month)}-${pad2(lastDay)}`;
-      return !(fim < firstOfMonth || inicio > lastOfMonth);
-    }
-
-    return false;
+app.get('/health', (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: 'rh-ciapi-backend',
+    time: new Date().toISOString()
   });
-}
+});
 
-module.exports = {
-  montarEstadoMensalServidor,
-  montarContextoTemplateFrequencia,
-  montarDiagnosticoMensal,
-  filtrarRegistrosDoMes,
-  normalizeFeriasInput,
-  normalizeAtestadosInput,
-  normalizeFaltasInput,
-  normalizeEventosInput,
-  normalizeOcorrenciasManuaisInput
-};
+app.get('/api/servidores', async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('servidores')
+      .select('*')
+      .limit(1000);
+
+    if (error) {
+      return res.status(400).json({
+        ok: false,
+        error: error.message
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: Array.isArray(data) ? data : []
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.use('/api/ferias', feriasExportRoutes);
+app.use('/api/frequencia', frequenciaRoutes);
+app.use('/api/frequencia', frequenciaExportRoutes);
+
+app.use((req, res) => {
+  return res.status(404).json({
+    ok: false,
+    error: `Rota não encontrada: ${req.method} ${req.originalUrl}`
+  });
+});
+
+app.use((err, _req, res, next) => {
+  console.error('Erro no backend:', err);
+
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  return res.status(500).json({
+    ok: false,
+    error: err instanceof Error ? err.message : 'Erro interno inesperado no servidor.'
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`Backend rodando na porta ${PORT}`);
+  console.log('Health: /health');
+  console.log('Servidores: GET /api/servidores');
+  console.log('Frequência: GET /api/frequencia');
+  console.log('Exportação de frequência: POST /api/frequencia/exportar');
+  console.log('Exportação de frequência: POST /api/frequencia/exportar/:formato');
+  console.log('Exportação de férias: POST /api/ferias/exportar');
+});
