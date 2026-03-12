@@ -99,14 +99,11 @@ async function convertDocxBufferToPdfBuffer(docxBuffer, basename) {
   fs.writeFileSync(inputPath, docxBuffer);
 
   try {
-    await execFileAsync(soffice, [
-      '--headless',
-      '--convert-to',
-      'pdf',
-      '--outdir',
-      outputDir,
-      inputPath
-    ], { timeout: 120000 });
+    await execFileAsync(
+      soffice,
+      ['--headless', '--convert-to', 'pdf', '--outdir', outputDir, inputPath],
+      { timeout: 120000 }
+    );
   } catch (error) {
     const stderr = String(error?.stderr || '').trim();
     const stdout = String(error?.stdout || '').trim();
@@ -135,16 +132,17 @@ async function exportarFrequencia({
 
   const resolvedTemplatePath = resolveTemplatePath(templatePath);
   const resolvedFormat = String(formato || 'docx').trim().toLowerCase();
+
   if (!['docx', 'pdf'].includes(resolvedFormat)) {
     throw new Error(`Formato inválido para exportação da frequência: ${formato}`);
   }
 
-  // manter compatibilidade com payload existente, mesmo que o corte real de linhas
-  // seja feito no builder/template via placeholders em branco.
   void removerLinhasExcedentes;
 
-  const baseName = sanitizeFileName(outputFileName || 'frequencia', resolvedFormat === 'pdf' ? '.pdf' : '.docx')
-    .replace(/\.(docx|pdf)$/i, '');
+  const baseName = sanitizeFileName(
+    outputFileName || 'frequencia',
+    resolvedFormat === 'pdf' ? '.pdf' : '.docx'
+  ).replace(/\.(docx|pdf)$/i, '');
 
   const docxBuffer = renderDocxBuffer(resolvedTemplatePath, templateData);
 
@@ -158,6 +156,7 @@ async function exportarFrequencia({
   }
 
   const pdfBuffer = await convertDocxBufferToPdfBuffer(docxBuffer, baseName);
+
   return {
     ok: true,
     filename: sanitizeFileName(baseName, '.pdf'),
