@@ -5,19 +5,21 @@ const { exportarFrequencia } = require('../services/frequenciaExportService');
 
 const router = express.Router();
 
-router.get('/exportar/health', async (_req, res) => {
-  return res.json({
-    ok: true,
-    route: '/api/frequencia/exportar',
-    method: 'POST'
-  });
-});
+function resolveFormato(req) {
+  const formatoBody = String(req.body?.formato || '').trim().toLowerCase();
+  const formatoParam = String(req.params?.formato || '').trim().toLowerCase();
+  return formatoBody || formatoParam || 'docx';
+}
 
-router.post('/exportar', async (req, res) => {
+function buildContentDisposition(filename) {
+  const safeName = String(filename || 'frequencia.docx').replace(/[\r\n"]/g, '_');
+  return `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`;
+}
+
+async function handleExport(req, res) {
   try {
     const {
       templateData,
-      formato,
       templatePath,
       outputFileName,
       removerLinhasExcedentes
@@ -32,17 +34,14 @@ router.post('/exportar', async (req, res) => {
 
     const result = await exportarFrequencia({
       templateData,
-      formato,
+      formato: resolveFormato(req),
       templatePath,
       outputFileName,
       removerLinhasExcedentes: removerLinhasExcedentes !== false
     });
 
-    res.setHeader('Content-Type', result.mimeType);
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${encodeURIComponent(result.filename)}"`
-    );
+    res.setHeader('Content-Type', result.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', buildContentDisposition(result.filename));
 
     return res.send(result.buffer);
   } catch (error) {
@@ -52,6 +51,19 @@ router.post('/exportar', async (req, res) => {
       details: error?.message || 'Erro interno'
     });
   }
+}
+
+router.get('/exportar/health', async (_req, res) => {
+  return res.json({
+    ok: true,
+    routes: [
+      'POST /api/frequencia/exportar',
+      'POST /api/frequencia/exportar/:formato'
+    ]
+  });
 });
+
+router.post('/exportar', handleExport);
+router.post('/exportar/:formato', handleExport);
 
 module.exports = router;
