@@ -121,6 +121,7 @@ app.listen(PORT, () => {
   console.log("Health: /health");
   console.log("Servidores: GET /api/servidores");
   console.log("Frequência: GET /api/frequencia");
-  console.log("Exportação de frequência: POST /api/frequencia/exportar/:formato");
+  console.log("Exportação de frequência: POST /api/frequencia/exportar");
+  console.log("Exportação de frequência (compat): POST /api/frequencia/exportar/:formato");
   console.log("Exportação de férias: POST /api/ferias/exportar");
 });
