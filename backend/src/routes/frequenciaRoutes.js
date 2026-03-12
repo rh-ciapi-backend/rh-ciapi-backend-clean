@@ -1,88 +1,96 @@
-const express = require('express');
-const {
-  listarFrequencia,
-  obterOcorrenciaPorId,
-  criarOcorrencia,
-  atualizarOcorrencia,
-  excluirOcorrencia,
-} = require('../services/frequenciaService');
-
+const express = require("express");
 const router = express.Router();
 
-router.get('/', async (req, res) => {
+const {
+  listarFrequenciaMensal,
+  registrarOcorrenciaFrequencia,
+  editarOcorrenciaFrequencia,
+  excluirOcorrenciaFrequencia,
+} = require("../services/frequenciaService");
+
+router.get("/", async (req, res) => {
   try {
-    const data = await listarFrequencia(req.query || {});
-    return res.status(200).json(data);
+    const ano = Number(req.query.ano);
+    const mes = Number(req.query.mes);
+    const servidorCpf = req.query.servidorCpf || req.query.cpf || null;
+
+    const data = await listarFrequenciaMensal({
+      supabase: req.app.locals.supabase,
+      ano,
+      mes,
+      servidorCpf,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      data,
+    });
   } catch (error) {
-    console.error('[frequenciaRoutes][GET /] erro:', error);
+    console.error("[FREQUENCIA][GET /] erro:", error);
     return res.status(500).json({
       ok: false,
-      error: 'Erro ao listar frequência',
-      details: error?.message || String(error),
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 });
 
-router.get('/:id', async (req, res) => {
+router.post("/", async (req, res) => {
   try {
-    const data = await obterOcorrenciaPorId(req.params.id);
+    const result = await registrarOcorrenciaFrequencia({
+      supabase: req.app.locals.supabase,
+      payload: req.body || {},
+    });
 
-    if (!data) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Ocorrência não encontrada',
-      });
-    }
-
-    return res.status(200).json(data);
+    return res.status(200).json({
+      ok: true,
+      data: result,
+    });
   } catch (error) {
-    console.error('[frequenciaRoutes][GET /:id] erro:', error);
+    console.error("[FREQUENCIA][POST /] erro:", error);
     return res.status(500).json({
       ok: false,
-      error: 'Erro ao buscar ocorrência',
-      details: error?.message || String(error),
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 });
 
-router.post('/', async (req, res) => {
+router.put("/:id", async (req, res) => {
   try {
-    const data = await criarOcorrencia(req.body || {});
-    return res.status(201).json(data);
+    const result = await editarOcorrenciaFrequencia({
+      supabase: req.app.locals.supabase,
+      id: req.params.id,
+      payload: req.body || {},
+    });
+
+    return res.status(200).json({
+      ok: true,
+      data: result,
+    });
   } catch (error) {
-    console.error('[frequenciaRoutes][POST /] erro:', error);
+    console.error("[FREQUENCIA][PUT /:id] erro:", error);
     return res.status(500).json({
       ok: false,
-      error: 'Erro ao criar ocorrência',
-      details: error?.message || String(error),
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.delete("/:id", async (req, res) => {
   try {
-    const data = await atualizarOcorrencia(req.params.id, req.body || {});
-    return res.status(200).json(data);
-  } catch (error) {
-    console.error('[frequenciaRoutes][PUT /:id] erro:', error);
-    return res.status(500).json({
-      ok: false,
-      error: 'Erro ao atualizar ocorrência',
-      details: error?.message || String(error),
+    const result = await excluirOcorrenciaFrequencia({
+      supabase: req.app.locals.supabase,
+      id: req.params.id,
     });
-  }
-});
 
-router.delete('/:id', async (req, res) => {
-  try {
-    await excluirOcorrencia(req.params.id);
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({
+      ok: true,
+      data: result,
+    });
   } catch (error) {
-    console.error('[frequenciaRoutes][DELETE /:id] erro:', error);
+    console.error("[FREQUENCIA][DELETE /:id] erro:", error);
     return res.status(500).json({
       ok: false,
-      error: 'Erro ao excluir ocorrência',
-      details: error?.message || String(error),
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 });
