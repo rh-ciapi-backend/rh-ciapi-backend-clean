@@ -1,86 +1,59 @@
 const express = require('express');
-const {
-  listarFrequenciaMensal,
-  criarOcorrencia,
-  editarOcorrencia,
-  excluirOcorrencia,
-} = require('../services/frequenciaService');
+const { exportarFrequencia } = require('../services/frequenciaExportService');
 
 const router = express.Router();
 
 /**
- * GET /api/frequencia?ano=2026&mes=3
- * Compatível com o frontend atual.
- */
-router.get('/', async (req, res) => {
-  try {
-    const result = await listarFrequenciaMensal(req.query);
-    return res.json(result);
-  } catch (error) {
-    console.error('[GET /api/frequencia] erro:', error);
-    return res.status(500).json({
-      ok: false,
-      error: 'Erro ao consolidar frequência mensal',
-      details: error.message,
-    });
-  }
-});
-
-/**
- * POST /api/frequencia/ocorrencias
+ * POST /api/frequencia/exportar
  * Body:
  * {
- *   servidor_cpf,
- *   data,
- *   tipo,
- *   turno,
- *   observacao
+ *   ano: 2026,
+ *   mes: 1,
+ *   servidorId?: "...",
+ *   servidorCpf?: "00000000000",
+ *   formato: "docx" | "pdf"
  * }
  */
-router.post('/ocorrencias', async (req, res) => {
+router.post('/exportar', async (req, res) => {
   try {
-    const result = await criarOcorrencia(req.body);
-    return res.status(201).json(result);
-  } catch (error) {
-    console.error('[POST /api/frequencia/ocorrencias] erro:', error);
-    return res.status(500).json({
-      ok: false,
-      error: 'Erro ao criar ocorrência de frequência',
-      details: error.message,
-    });
-  }
-});
+    const { ano, mes, servidorId, servidorCpf, formato } = req.body || {};
 
-/**
- * PUT /api/frequencia/ocorrencias/:id
- */
-router.put('/ocorrencias/:id', async (req, res) => {
-  try {
-    const result = await editarOcorrencia(req.params.id, req.body);
-    return res.json(result);
-  } catch (error) {
-    console.error('[PUT /api/frequencia/ocorrencias/:id] erro:', error);
-    return res.status(500).json({
-      ok: false,
-      error: 'Erro ao editar ocorrência de frequência',
-      details: error.message,
+    const result = await exportarFrequencia({
+      ano,
+      mes,
+      servidorId,
+      servidorCpf,
+      formato,
     });
-  }
-});
 
-/**
- * DELETE /api/frequencia/ocorrencias/:id
- */
-router.delete('/ocorrencias/:id', async (req, res) => {
-  try {
-    const result = await excluirOcorrencia(req.params.id);
-    return res.json(result);
+    res.setHeader('Content-Type', result.mimeType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${result.fileName}"`
+    );
+    res.setHeader('Content-Length', result.buffer.length);
+
+    return res.status(200).send(result.buffer);
   } catch (error) {
-    console.error('[DELETE /api/frequencia/ocorrencias/:id] erro:', error);
-    return res.status(500).json({
+    console.error('[POST /api/frequencia/exportar] erro:', error);
+
+    const message = error?.message || 'Erro interno ao exportar frequência';
+    const status =
+      message.includes('obrigatório') ||
+      message.includes('Formato inválido') ||
+      message.includes('Informe servidorId ou servidorCpf')
+        ? 400
+        : message.includes('não encontrado') ||
+          message.includes('Não foi possível localizar')
+        ? 404
+        : message.includes('LibreOffice/soffice')
+        ? 503
+        : 500;
+
+    return res.status(status).json({
       ok: false,
-      error: 'Erro ao excluir ocorrência de frequência',
-      details: error.message,
+      error: 'Erro ao exportar frequência',
+      details: message,
     });
   }
 });
