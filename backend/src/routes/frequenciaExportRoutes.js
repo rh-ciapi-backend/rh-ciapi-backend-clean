@@ -1,69 +1,88 @@
-'use strict';
-
 const express = require('express');
-const { exportarFrequencia } = require('../services/frequenciaExportService');
+const {
+  listarFrequenciaMensal,
+  criarOcorrencia,
+  editarOcorrencia,
+  excluirOcorrencia,
+} = require('../services/frequenciaService');
 
 const router = express.Router();
 
-function resolveFormato(req) {
-  const formatoBody = String(req.body?.formato || '').trim().toLowerCase();
-  const formatoParam = String(req.params?.formato || '').trim().toLowerCase();
-  return formatoBody || formatoParam || 'docx';
-}
-
-function buildContentDisposition(filename) {
-  const safeName = String(filename || 'frequencia.docx').replace(/[\r\n"]/g, '_');
-  return `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`;
-}
-
-async function handleExport(req, res) {
+/**
+ * GET /api/frequencia?ano=2026&mes=3
+ * Compatível com o frontend atual.
+ */
+router.get('/', async (req, res) => {
   try {
-    const {
-      templateData,
-      templatePath,
-      outputFileName,
-      removerLinhasExcedentes
-    } = req.body || {};
-
-    if (!templateData || typeof templateData !== 'object') {
-      return res.status(400).json({
-        ok: false,
-        error: 'templateData é obrigatório para exportar a frequência.'
-      });
-    }
-
-    const result = await exportarFrequencia({
-      templateData,
-      formato: resolveFormato(req),
-      templatePath,
-      outputFileName,
-      removerLinhasExcedentes: removerLinhasExcedentes !== false
-    });
-
-    res.setHeader('Content-Type', result.mimeType || 'application/octet-stream');
-    res.setHeader('Content-Disposition', buildContentDisposition(result.filename));
-
-    return res.send(result.buffer);
+    const result = await listarFrequenciaMensal(req.query);
+    return res.json(result);
   } catch (error) {
+    console.error('[GET /api/frequencia] erro:', error);
     return res.status(500).json({
       ok: false,
-      error: 'Falha ao exportar frequência',
-      details: error?.message || 'Erro interno'
+      error: 'Erro ao consolidar frequência mensal',
+      details: error.message,
     });
   }
-}
-
-router.get('/exportar/health', async (_req, res) => {
-  return res.json({
-    ok: true,
-    routes: [
-      'POST /api/frequencia/exportar',
-      'POST /api/frequencia/exportar/:formato'
-    ]
-  });
 });
 
-router.post('/exportar', handleExport);
-router.post('/exportar/:formato', handleExport);
+/**
+ * POST /api/frequencia/ocorrencias
+ * Body:
+ * {
+ *   servidor_cpf,
+ *   data,
+ *   tipo,
+ *   turno,
+ *   observacao
+ * }
+ */
+router.post('/ocorrencias', async (req, res) => {
+  try {
+    const result = await criarOcorrencia(req.body);
+    return res.status(201).json(result);
+  } catch (error) {
+    console.error('[POST /api/frequencia/ocorrencias] erro:', error);
+    return res.status(500).json({
+      ok: false,
+      error: 'Erro ao criar ocorrência de frequência',
+      details: error.message,
+    });
+  }
+});
+
+/**
+ * PUT /api/frequencia/ocorrencias/:id
+ */
+router.put('/ocorrencias/:id', async (req, res) => {
+  try {
+    const result = await editarOcorrencia(req.params.id, req.body);
+    return res.json(result);
+  } catch (error) {
+    console.error('[PUT /api/frequencia/ocorrencias/:id] erro:', error);
+    return res.status(500).json({
+      ok: false,
+      error: 'Erro ao editar ocorrência de frequência',
+      details: error.message,
+    });
+  }
+});
+
+/**
+ * DELETE /api/frequencia/ocorrencias/:id
+ */
+router.delete('/ocorrencias/:id', async (req, res) => {
+  try {
+    const result = await excluirOcorrencia(req.params.id);
+    return res.json(result);
+  } catch (error) {
+    console.error('[DELETE /api/frequencia/ocorrencias/:id] erro:', error);
+    return res.status(500).json({
+      ok: false,
+      error: 'Erro ao excluir ocorrência de frequência',
+      details: error.message,
+    });
+  }
+});
 
 module.exports = router;
