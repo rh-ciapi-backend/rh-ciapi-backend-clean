@@ -8,6 +8,7 @@ const { createClient } = require("@supabase/supabase-js");
 dotenv.config();
 
 const app = express();
+app.disable("x-powered-by");
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -40,7 +41,9 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
 const supabase = createClient(SUPABASE_URL || "", SUPABASE_SERVICE_KEY || "");
 app.locals.supabase = supabase;
 
-const exportDir = process.env.EXPORT_DIR || path.join("/tmp", "exports");
+const exportDir =
+  process.env.EXPORT_DIR || path.join("/tmp", "exports");
+
 try {
   if (!fs.existsSync(exportDir)) {
     fs.mkdirSync(exportDir, { recursive: true });
@@ -63,22 +66,31 @@ function safeRequire(modulePath, label) {
   }
 }
 
-const feriasExportRoutes = safeRequire("./src/routes/feriasExportRoutes", "feriasExportRoutes");
-const frequenciaRoutes = safeRequire("./src/routes/frequenciaRoutes", "frequenciaRoutes");
+const feriasExportRoutes = safeRequire(
+  "./src/routes/feriasExportRoutes",
+  "feriasExportRoutes"
+);
+
+const frequenciaRoutes = safeRequire(
+  "./src/routes/frequenciaRoutes",
+  "frequenciaRoutes"
+);
+
 const frequenciaExportRoutes = safeRequire(
   "./src/routes/frequenciaExportRoutes",
   "frequenciaExportRoutes"
 );
 
 app.get("/", (_req, res) => {
-  res.status(200).send("RH CIAPI Backend OK");
+  return res.status(200).send("RH CIAPI Backend OK");
 });
 
 app.get("/health", (_req, res) => {
-  res.status(200).json({
+  return res.status(200).json({
     ok: true,
     service: "rh-ciapi-backend",
     time: new Date().toISOString(),
+    exportDir,
     routes: {
       feriasExport: Boolean(feriasExportRoutes),
       frequencia: Boolean(frequenciaRoutes),
@@ -147,7 +159,10 @@ app.use((err, _req, res, next) => {
 
   return res.status(500).json({
     ok: false,
-    error: err instanceof Error ? err.message : "Erro interno inesperado no servidor.",
+    error:
+      err instanceof Error
+        ? err.message
+        : "Erro interno inesperado no servidor.",
   });
 });
 
@@ -157,6 +172,5 @@ app.listen(PORT, () => {
   console.log("Servidores: GET /api/servidores");
   console.log("Frequência: GET /api/frequencia");
   console.log("Exportação de frequência: POST /api/frequencia/exportar");
-  console.log("Compatibilidade: POST /api/frequencia/exportar/:formato");
   console.log("Exportação de férias: POST /api/ferias/exportar");
 });
