@@ -1,6 +1,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { consolidateMonthByServidor } = require('../utils/frequenciaDayMap');
-const { normalizeDateInput, normalizeText, safeArray } = require('../utils/frequenciaRules');
+const { buildFrequenciaTemplateData } = require('../utils/frequenciaTemplateBuilder');
+const { normalizeDateInput, safeArray } = require('../utils/frequenciaRules');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -37,13 +38,11 @@ function normalizeServidor(row) {
     cpf ||
     pick(row, ['matricula'], '');
 
-  const nome = pick(row, [
-    'nome_completo',
-    'nome',
-    'servidor_nome',
-    'full_name',
-    'name',
-  ], 'Servidor sem nome');
+  const nome = pick(
+    row,
+    ['nome_completo', 'nome', 'servidor_nome', 'full_name', 'name'],
+    'Servidor sem nome'
+  );
 
   return {
     id,
@@ -53,6 +52,8 @@ function normalizeServidor(row) {
     categoria: pick(row, ['categoria_canonic', 'categoria_canonica', 'categoria']),
     cargo: pick(row, ['cargo', 'funcao', 'role']),
     setor: pick(row, ['setor', 'lotacao', 'departamento']),
+    unidade: pick(row, ['unidade', 'orgao', 'secretaria', 'setor']),
+    lotacao: pick(row, ['lotacao', 'setor', 'departamento']),
     status: pick(row, ['status', 'situacao'], 'ATIVO'),
     chDiaria: pick(row, ['ch_diaria', 'chDiaria', 'carga_horaria_diaria']),
     chSemanal: pick(row, ['ch_semanal', 'chSemanal', 'carga_horaria_semanal']),
@@ -181,9 +182,7 @@ async function fetchOcorrenciasFromFrequenciaOcorrencias({ year, month, servidor
 
   if (!cpfs.length) return [];
 
-  const tryFields = ['servidor_cpf', 'cpf'];
-
-  for (const field of tryFields) {
+  for (const field of ['servidor_cpf', 'cpf']) {
     const { data, error } = await supabase
       .from('frequencia_ocorrencias')
       .select('*')
@@ -205,8 +204,6 @@ async function fetchFaltasFallback({ year, month, servidores }) {
 
   if (!cpfs.length) return [];
 
-  const tried = [];
-
   for (const field of ['servidor_cpf', 'cpf']) {
     const { data, error } = await supabase
       .from('faltas')
@@ -218,8 +215,6 @@ async function fetchFaltasFallback({ year, month, servidores }) {
     if (!error) {
       return safeArray(data).map((row) => normalizeOcorrencia(row));
     }
-
-    tried.push(error.message);
   }
 
   return [];
@@ -232,9 +227,8 @@ async function fetchAtestadosFallback({ year, month, servidores }) {
   if (!cpfs.length) return [];
 
   const rows = [];
-  const fieldCandidates = ['servidor_cpf', 'cpf'];
 
-  for (const field of fieldCandidates) {
+  for (const field of ['servidor_cpf', 'cpf']) {
     const { data, error } = await supabase
       .from('atestados')
       .select('*')
@@ -258,12 +252,15 @@ async function fetchAtestadosFallback({ year, month, servidores }) {
       if (!ini) continue;
       if (fim < start || ini > end) continue;
 
-      // Expande por dia para a consolidação funcionar com 1 item/dia
       let cursor = new Date(`${ini}T12:00:00`);
       const endDate = new Date(`${fim}T12:00:00`);
 
       while (cursor <= endDate) {
-        const dataIso = normalizeDateInput(cursor);
+        const y = cursor.getFullYear();
+        const m = String(cursor.getMonth() + 1).padStart(2, '0');
+        const d = String(cursor.getDate()).padStart(2, '0');
+        const dataIso = `${y}-${m}-${d}`;
+
         rows.push(
           normalizeOcorrencia(
             {
@@ -275,6 +272,7 @@ async function fetchAtestadosFallback({ year, month, servidores }) {
             'ATESTADO'
           )
         );
+
         cursor.setDate(cursor.getDate() + 1);
       }
     }
@@ -347,7 +345,11 @@ async function listarFrequenciaMensal(params = {}) {
       fetchAtestadosFallback({ year, month, servidores }).catch(() => []),
     ]);
 
-  const ocorrencias = [...safeArray(ocorrenciasMain), ...safeArray(faltasFallback), ...safeArray(atestadosFallback)];
+  const ocorrencias = [
+    ...safeArray(ocorrenciasMain),
+    ...safeArray(faltasFallback),
+    ...safeArray(atestadosFallback),
+  ];
 
   const feriasGrouped = groupByServidor(servidores, ferias);
   const ocorrenciasGrouped = groupByServidor(servidores, ocorrencias);
@@ -374,6 +376,8 @@ async function listarFrequenciaMensal(params = {}) {
         categoria: servidor.categoria,
         cargo: servidor.cargo,
         setor: servidor.setor,
+        unidade: servidor.unidade,
+        lotacao: servidor.lotacao,
         status: servidor.status,
         chDiaria: servidor.chDiaria,
         chSemanal: servidor.chSemanal,
@@ -383,7 +387,15 @@ async function listarFrequenciaMensal(params = {}) {
       ocorrencias: servidorOcorrencias,
     });
 
-    return consolidated;
+    return {
+      ...consolidated,
+      templateData: buildFrequenciaTemplateData(
+        consolidated.servidor,
+        consolidated.ano,
+        consolidated.mes,
+        consolidated.dayItems
+      ),
+    };
   });
 
   return {
