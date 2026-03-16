@@ -10,6 +10,13 @@ function safeText(value) {
   return text === 'undefined' || text === 'null' ? '' : text;
 }
 
+function normalizeText(value) {
+  return safeText(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+}
+
 function monthLabel(month) {
   const months = [
     '',
@@ -57,26 +64,6 @@ function getDayItemMap(dayItems = []) {
   return map;
 }
 
-function getTurnRubrica(turno) {
-  return safeText(turno?.rubrica);
-}
-
-function getTurnOcorrencia(turno) {
-  return safeText(turno?.ocorrencia);
-}
-
-function getTurnEntrada(turno) {
-  return safeText(turno?.entrada);
-}
-
-function getTurnSaida(turno) {
-  return safeText(turno?.saida);
-}
-
-function getTurnAbono(turno) {
-  return safeText(turno?.abono);
-}
-
 function buildEmptyDayPlaceholders(day) {
   return {
     [String(day)]: '',
@@ -94,12 +81,80 @@ function buildEmptyDayPlaceholders(day) {
     [`A1_${day}`]: '',
     [`A2_${day}`]: '',
 
-    // aliases para templates variados
+    // aliases defensivos para templates variados
     [`H1E_${day}`]: '',
     [`H1S_${day}`]: '',
     [`H2E_${day}`]: '',
     [`H2S_${day}`]: '',
   };
+}
+
+function extractTextsFromDayItem(dayItem = {}) {
+  const values = [
+    dayItem?.rubrica,
+    dayItem?.status,
+    dayItem?.tipo,
+    dayItem?.observacao,
+    dayItem?.descricao,
+    dayItem?.legenda,
+    dayItem?.finalStatus,
+    dayItem?.final_status,
+    dayItem?.evento,
+    dayItem?.eventoTipo,
+    dayItem?.evento_titulo,
+
+    dayItem?.turno1?.rubrica,
+    dayItem?.turno1?.ocorrencia,
+    dayItem?.turno1?.tipo,
+    dayItem?.turno1?.descricao,
+
+    dayItem?.turno2?.rubrica,
+    dayItem?.turno2?.ocorrencia,
+    dayItem?.turno2?.tipo,
+    dayItem?.turno2?.descricao,
+  ];
+
+  return values
+    .map((value) => safeText(value))
+    .filter(Boolean);
+}
+
+function hasAny(texts, terms) {
+  return texts.some((text) => {
+    const normalized = normalizeText(text);
+    return terms.some((term) => normalized.includes(term));
+  });
+}
+
+function resolveRubrica(dayItem = {}) {
+  const texts = extractTextsFromDayItem(dayItem);
+
+  if (hasAny(texts, ['FERIAS', 'FÉRIAS'])) {
+    return 'FÉRIAS';
+  }
+
+  if (hasAny(texts, ['PONTO FACULTATIVO', 'FACULTATIVO'])) {
+    return 'PONTO FACULTATIVO';
+  }
+
+  if (hasAny(texts, ['FERIADO'])) {
+    return 'FERIADO';
+  }
+
+  if (hasAny(texts, ['SABADO', 'SÁBADO'])) {
+    return 'SABADO';
+  }
+
+  if (hasAny(texts, ['DOMINGO'])) {
+    return 'DOMINGO';
+  }
+
+  return '';
+}
+
+function resolveOcorrenciaPorTurno(turno = {}) {
+  const ocorrencia = safeText(turno?.ocorrencia);
+  return ocorrencia || '';
 }
 
 function buildDayPlaceholders(day, dayItem, totalDiasMes) {
@@ -110,30 +165,20 @@ function buildDayPlaceholders(day, dayItem, totalDiasMes) {
   const turno1 = dayItem.turno1 || {};
   const turno2 = dayItem.turno2 || {};
 
-  const rubrica1 = getTurnRubrica(turno1);
-  const rubrica2 = getTurnRubrica(turno2);
-  const rubricaDireta = rubrica1 || rubrica2 || '';
-
-  const ocorrencia1 = getTurnOcorrencia(turno1);
-  const ocorrencia2 = getTurnOcorrencia(turno2);
-
-  const entrada1 = getTurnEntrada(turno1);
-  const saida1 = getTurnSaida(turno1);
-  const entrada2 = getTurnEntrada(turno2);
-  const saida2 = getTurnSaida(turno2);
-
-  const abono1 = getTurnAbono(turno1);
-  const abono2 = getTurnAbono(turno2);
+  const rubricaDireta = resolveRubrica(dayItem);
+  const ocorrencia1 = resolveOcorrenciaPorTurno(turno1);
+  const ocorrencia2 = resolveOcorrenciaPorTurno(turno2);
 
   return {
     [String(day)]: String(day),
     [`D${day}`]: String(day),
 
-    // rubrica principal
+    // rubrica principal:
+    // somente sábado, domingo, feriado, ponto facultativo e férias
     [`S${day}`]: rubricaDireta,
     [`R${day}`]: rubricaDireta,
 
-    // ocorrências por turno
+    // ocorrências por turno permanecem separadas
     [`O1_${day}`]: ocorrencia1,
     [`O2_${day}`]: ocorrencia2,
 
@@ -141,19 +186,21 @@ function buildDayPlaceholders(day, dayItem, totalDiasMes) {
     [`T1_${day}`]: '',
     [`T2_${day}`]: '',
 
-    // horas e abonos - SEMPRE string vazia quando não houver valor
-    [`E1_${day}`]: entrada1,
-    [`SA1_${day}`]: saida1,
-    [`E2_${day}`]: entrada2,
-    [`SA2_${day}`]: saida2,
-    [`A1_${day}`]: abono1,
-    [`A2_${day}`]: abono2,
+    // horas SEMPRE vazias
+    [`E1_${day}`]: '',
+    [`SA1_${day}`]: '',
+    [`E2_${day}`]: '',
+    [`SA2_${day}`]: '',
 
-    // aliases adicionais
-    [`H1E_${day}`]: entrada1,
-    [`H1S_${day}`]: saida1,
-    [`H2E_${day}`]: entrada2,
-    [`H2S_${day}`]: saida2,
+    // abonos vazios para evitar lixo no template
+    [`A1_${day}`]: '',
+    [`A2_${day}`]: '',
+
+    // aliases adicionais de horas também vazios
+    [`H1E_${day}`]: '',
+    [`H1S_${day}`]: '',
+    [`H2E_${day}`]: '',
+    [`H2S_${day}`]: '',
   };
 }
 
@@ -166,6 +213,26 @@ function buildHiddenRowsMeta(totalDiasMes) {
     hiddenRowsFrom: hiddenRowsFrom <= 31 ? hiddenRowsFrom : null,
     hiddenRowsTo: hiddenRowsFrom <= 31 ? hiddenRowsTo : null,
   };
+}
+
+function sanitizeTemplatePayload(payload = {}) {
+  const clean = {};
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (value === null || value === undefined) {
+      clean[key] = '';
+      continue;
+    }
+
+    if (typeof value === 'string') {
+      clean[key] = safeText(value);
+      continue;
+    }
+
+    clean[key] = value;
+  }
+
+  return clean;
 }
 
 function buildFrequenciaTemplateData(servidor = {}, ano, mes, dayItems = []) {
@@ -189,10 +256,11 @@ function buildFrequenciaTemplateData(servidor = {}, ano, mes, dayItems = []) {
 
   Object.assign(payload, buildHiddenRowsMeta(totalDiasMes));
 
-  return payload;
+  return sanitizeTemplatePayload(payload);
 }
 
 module.exports = {
   buildFrequenciaTemplateData,
   monthLabel,
+  sanitizeTemplatePayload,
 };
