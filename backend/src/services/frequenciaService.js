@@ -54,7 +54,7 @@ function normalizeServidor(row) {
     setor: pick(row, ['setor', 'lotacao', 'departamento']),
     unidade: pick(row, ['unidade', 'orgao', 'secretaria', 'setor']),
     lotacao: pick(row, ['lotacao', 'setor', 'departamento']),
-    status: pick(row, ['status', 'situacao'], 'ATIVO'),
+    status: pick(row, ['status', 'situacao'], ''),
     chDiaria: pick(row, ['ch_diaria', 'chDiaria', 'carga_horaria_diaria']),
     chSemanal: pick(row, ['ch_semanal', 'chSemanal', 'carga_horaria_semanal']),
     raw: row,
@@ -102,7 +102,7 @@ function normalizeEventoRow(row) {
   };
 }
 
-async function fetchServidores({ cpf, setor, categoria, status = 'ATIVO' }) {
+async function fetchServidores({ cpf, setor, categoria, status }) {
   let query = supabase.from('servidores').select('*');
 
   if (cpf) {
@@ -117,11 +117,37 @@ async function fetchServidores({ cpf, setor, categoria, status = 'ATIVO' }) {
     query = query.ilike('categoria', `%${categoria}%`);
   }
 
-  if (status) {
-    query = query.eq('status', status);
+  // aplica filtro de status somente se vier preenchido de verdade
+  if (status && String(status).trim()) {
+    query = query.ilike('status', String(status).trim());
   }
 
-  const { data, error } = await query.order('nome', { ascending: true });
+  let { data, error } = await query.order('nome', { ascending: true });
+
+  // fallback para bancos cujo campo seja nome_completo em vez de nome
+  if (error) {
+    const fallbackQuery = supabase.from('servidores').select('*');
+
+    if (cpf) {
+      fallbackQuery.eq('cpf', onlyDigits(cpf));
+    }
+
+    if (setor) {
+      fallbackQuery.ilike('setor', `%${setor}%`);
+    }
+
+    if (categoria) {
+      fallbackQuery.ilike('categoria', `%${categoria}%`);
+    }
+
+    if (status && String(status).trim()) {
+      fallbackQuery.ilike('status', String(status).trim());
+    }
+
+    const fallback = await fallbackQuery.order('nome_completo', { ascending: true });
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) {
     throw new Error(`Erro ao buscar servidores: ${error.message}`);
@@ -182,16 +208,21 @@ async function fetchOcorrenciasFromFrequenciaOcorrencias({ year, month, servidor
 
   if (!cpfs.length) return [];
 
-  for (const field of ['servidor_cpf', 'cpf']) {
-    const { data, error } = await supabase
-      .from('frequencia_ocorrencias')
-      .select('*')
-      .in(field, cpfs)
-      .gte('data', start)
-      .lte('data', end);
+  const dateFields = ['data', 'data_ocorrencia'];
+  const cpfFields = ['servidor_cpf', 'cpf'];
 
-    if (!error) {
-      return safeArray(data).map((row) => normalizeOcorrencia(row));
+  for (const cpfField of cpfFields) {
+    for (const dateField of dateFields) {
+      const { data, error } = await supabase
+        .from('frequencia_ocorrencias')
+        .select('*')
+        .in(cpfField, cpfs)
+        .gte(dateField, start)
+        .lte(dateField, end);
+
+      if (!error) {
+        return safeArray(data).map((row) => normalizeOcorrencia(row));
+      }
     }
   }
 
@@ -204,16 +235,21 @@ async function fetchFaltasFallback({ year, month, servidores }) {
 
   if (!cpfs.length) return [];
 
-  for (const field of ['servidor_cpf', 'cpf']) {
-    const { data, error } = await supabase
-      .from('faltas')
-      .select('*')
-      .in(field, cpfs)
-      .gte('data', start)
-      .lte('data', end);
+  const cpfFields = ['servidor_cpf', 'cpf'];
+  const dateFields = ['data', 'data_ocorrencia', 'dia'];
 
-    if (!error) {
-      return safeArray(data).map((row) => normalizeOcorrencia(row));
+  for (const cpfField of cpfFields) {
+    for (const dateField of dateFields) {
+      const { data, error } = await supabase
+        .from('faltas')
+        .select('*')
+        .in(cpfField, cpfs)
+        .gte(dateField, start)
+        .lte(dateField, end);
+
+      if (!error) {
+        return safeArray(data).map((row) => normalizeOcorrencia(row));
+      }
     }
   }
 
@@ -321,7 +357,7 @@ async function listarFrequenciaMensal(params = {}) {
     cpf: params.cpf,
     setor: params.setor,
     categoria: params.categoria,
-    status: params.status || 'ATIVO',
+    status: params.status || undefined,
   });
 
   if (!servidores.length) {
