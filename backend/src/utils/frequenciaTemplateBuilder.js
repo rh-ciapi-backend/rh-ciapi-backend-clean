@@ -113,6 +113,10 @@ function resolveRubrica(dayItem = {}) {
   return '';
 }
 
+function resolveHorasPlaceholder(rubrica) {
+  return rubrica ? '————' : '';
+}
+
 function resolveOcorrenciaPorTurno(turno = {}) {
   return safeText(turno?.ocorrencia);
 }
@@ -123,10 +127,9 @@ function buildEmptyDayPlaceholders(day) {
     [`D${day}`]: '',
     [`S${day}`]: '',
     [`R${day}`]: '',
+    [`T${day}`]: '',
     [`O1_${day}`]: '',
     [`O2_${day}`]: '',
-    [`T1_${day}`]: '',
-    [`T2_${day}`]: '',
     [`E1_${day}`]: '',
     [`SA1_${day}`]: '',
     [`E2_${day}`]: '',
@@ -149,6 +152,7 @@ function buildDayPlaceholders(day, dayItem, totalDiasMes) {
   const turno2 = dayItem.turno2 || {};
 
   const rubricaDireta = resolveRubrica(dayItem);
+  const horasPlaceholder = resolveHorasPlaceholder(rubricaDireta);
   const ocorrencia1 = resolveOcorrenciaPorTurno(turno1);
   const ocorrencia2 = resolveOcorrenciaPorTurno(turno2);
 
@@ -156,29 +160,26 @@ function buildDayPlaceholders(day, dayItem, totalDiasMes) {
     [String(day)]: String(day),
     [`D${day}`]: String(day),
 
-    // RUBRICA: só eventos válidos
+    // Horas do template oficial: {{T1}} até {{T31}}
+    // Só recebem traços quando houver sábado, domingo, feriado, férias ou facultativo.
+    [`T${day}`]: horasPlaceholder,
+
+    // Rubrica do servidor
     [`S${day}`]: rubricaDireta,
     [`R${day}`]: rubricaDireta,
 
-    // OCORRÊNCIAS por turno preservadas
+    // Ocorrências por turno
     [`O1_${day}`]: ocorrencia1,
     [`O2_${day}`]: ocorrencia2,
 
-    // aliases defensivos
-    [`T1_${day}`]: '',
-    [`T2_${day}`]: '',
-
-    // HORAS sempre vazias
+    // Placeholders alternativos de hora ficam vazios para não poluir o DOCX
     [`E1_${day}`]: '',
     [`SA1_${day}`]: '',
     [`E2_${day}`]: '',
     [`SA2_${day}`]: '',
 
-    // ABONO vazio
     [`A1_${day}`]: '',
     [`A2_${day}`]: '',
-
-    // aliases extras de horas sempre vazios
     [`H1E_${day}`]: '',
     [`H1S_${day}`]: '',
     [`H2E_${day}`]: '',
