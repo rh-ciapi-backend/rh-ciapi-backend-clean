@@ -28,7 +28,10 @@ function onlyDigits(value) {
 
 function safeText(value) {
   if (value === null || value === undefined) return '';
-  return String(value).trim();
+  const text = String(value).trim();
+  if (!text) return '';
+  if (text === 'undefined' || text === 'null') return '';
+  return text;
 }
 
 function slugify(value) {
@@ -76,6 +79,45 @@ async function resolveTemplatePath() {
   );
 }
 
+function deepSanitize(value) {
+  if (value === null || value === undefined) return '';
+
+  if (typeof value === 'string') {
+    return safeText(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(deepSanitize);
+  }
+
+  if (typeof value === 'object') {
+    const output = {};
+    for (const [key, item] of Object.entries(value)) {
+      output[key] = deepSanitize(item);
+    }
+    return output;
+  }
+
+  return value;
+}
+
+function forceHourFieldsBlank(templateData = {}) {
+  const out = { ...templateData };
+
+  for (let day = 1; day <= 31; day += 1) {
+    out[`E1_${day}`] = '';
+    out[`SA1_${day}`] = '';
+    out[`E2_${day}`] = '';
+    out[`SA2_${day}`] = '';
+    out[`H1E_${day}`] = '';
+    out[`H1S_${day}`] = '';
+    out[`H2E_${day}`] = '';
+    out[`H2S_${day}`] = '';
+  }
+
+  return out;
+}
+
 function buildDocxBufferFromTemplate(templateBinary, templateData) {
   try {
     const zip = new PizZip(templateBinary);
@@ -87,9 +129,16 @@ function buildDocxBufferFromTemplate(templateBinary, templateData) {
         start: '{{',
         end: '}}',
       },
+      nullGetter() {
+        return '';
+      },
     });
 
-    doc.render(sanitizeTemplatePayload(templateData));
+    const finalData = forceHourFieldsBlank(
+      sanitizeTemplatePayload(deepSanitize(templateData))
+    );
+
+    doc.render(finalData);
 
     return doc.getZip().generate({
       type: 'nodebuffer',
@@ -158,7 +207,13 @@ function extractConsolidatedItem(result, { servidorId, servidorCpf }) {
 
   if (servidorId !== undefined && servidorId !== null && servidorId !== '') {
     const byId = rows.find(
-      (row) => String(row?.servidor?.id ?? '') === String(servidorId)
+      (row) =>
+        String(
+          row?.servidor?.id ??
+          row?.servidor?.servidor ??
+          row?.servidor?.uuid ??
+          ''
+        ) === String(servidorId)
     );
     if (byId) return byId;
   }
@@ -206,16 +261,25 @@ async function getConsolidatedFrequenciaByServidor({
 }
 
 function buildTemplateDataFromConsolidated(item) {
-  if (item?.templateData && typeof item.templateData === 'object') {
-    return sanitizeTemplatePayload(item.templateData);
-  }
-
-  return buildFrequenciaTemplateData(
+  const fromBuilder = buildFrequenciaTemplateData(
     item?.servidor || {},
     item?.ano,
     item?.mes,
     item?.dayItems || []
   );
+
+  const rawTemplateData =
+    item?.templateData && typeof item.templateData === 'object'
+      ? deepSanitize(item.templateData)
+      : {};
+
+  // prioridade do builder para garantir horas vazias e rubrica correta
+  const merged = {
+    ...rawTemplateData,
+    ...fromBuilder,
+  };
+
+  return forceHourFieldsBlank(sanitizeTemplatePayload(deepSanitize(merged)));
 }
 
 async function ensureSofficeAvailable() {
@@ -278,7 +342,7 @@ async function convertDocxBufferToPdfBuffer(docxBuffer, outputBaseName) {
     try {
       await fsp.rm(tempDir, { recursive: true, force: true });
     } catch (_) {
-      // ignora erro de limpeza
+      // ignora
     }
   }
 }
