@@ -80,6 +80,10 @@ function buildDocxBufferFromTemplate(templateBinary, templateData) {
     const doc = new Docxtemplater(zip, {
       paragraphLoop: true,
       linebreaks: true,
+      delimiters: {
+        start: '{{',
+        end: '}}',
+      },
     });
 
     doc.render(templateData);
@@ -317,7 +321,7 @@ async function exportarFrequencia({
   });
 
   const templateData = buildTemplateDataFromConsolidated(consolidated);
-  const templateBinary = await fsp.readFile(templatePath, 'binary');
+  const templateBinary = await fsp.readFile(templatePath);
   const docxBuffer = buildDocxBufferFromTemplate(templateBinary, templateData);
 
   const baseFileName = getFriendlyFileName(
