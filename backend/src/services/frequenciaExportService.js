@@ -50,7 +50,7 @@ function resolveTemplateCandidates() {
   return [
     process.env.FREQUENCIA_TEMPLATE_PATH,
     path.join(cwd, 'templates', 'modelo_frequencia.docx'),
-    path.join(cwd, 'backend', 'templates', 'modelo_frequencia.docx'),
+    path.join(cwd, 'src', 'templates', 'modelo_frequencia.docx'),
     path.join(__dirname, '../../templates/modelo_frequencia.docx'),
     path.join(__dirname, '../../../templates/modelo_frequencia.docx'),
   ].filter(Boolean);
@@ -64,13 +64,12 @@ async function resolveTemplatePath() {
       await fsp.access(candidate, fs.constants.R_OK);
       return candidate;
     } catch (_) {
-      // tenta próximo
+      // tenta o próximo
     }
   }
 
-  const listed = candidates.map((p) => `- ${p}`).join('\n');
   throw new Error(
-    `Template oficial da frequência não encontrado. Verifique FREQUENCIA_TEMPLATE_PATH ou coloque o arquivo modelo_frequencia.docx em uma destas rotas:\n${listed}`
+    `Template oficial da frequência não encontrado. Verifique FREQUENCIA_TEMPLATE_PATH ou coloque o arquivo modelo_frequencia.docx em uma destas rotas: ${candidates.join(' | ')}`
   );
 }
 
@@ -91,9 +90,12 @@ function buildDocxBufferFromTemplate(templateBinary, templateData) {
     });
   } catch (error) {
     const explanation =
-      error?.properties?.errors?.map((e) => e.properties?.explanation).filter(Boolean).join(' | ') ||
-      error.message ||
-      'Erro desconhecido ao renderizar DOCX';
+      error?.properties?.errors
+        ?.map((e) => e?.properties?.explanation)
+        .filter(Boolean)
+        .join(' | ') ||
+      error?.message ||
+      'Erro desconhecido ao preencher template DOCX';
 
     throw new Error(`Falha ao preencher o template DOCX: ${explanation}`);
   }
@@ -133,7 +135,13 @@ async function findServidorBase({ servidorId, servidorCpf }) {
 }
 
 function extractConsolidatedItem(result, { servidorId, servidorCpf }) {
-  const rows = Array.isArray(result?.data) ? result.data : [];
+  const wrapper = result?.data;
+  const rows = Array.isArray(wrapper)
+    ? wrapper
+    : Array.isArray(wrapper?.data)
+    ? wrapper.data
+    : [];
+
   const cpf = onlyDigits(servidorCpf);
 
   if (cpf) {
@@ -141,15 +149,25 @@ function extractConsolidatedItem(result, { servidorId, servidorCpf }) {
     if (byCpf) return byCpf;
   }
 
-  if (servidorId) {
-    const byId = rows.find((row) => String(row?.servidor?.id || '') === String(servidorId));
+  if (servidorId !== undefined && servidorId !== null && servidorId !== '') {
+    const byId = rows.find(
+      (row) => String(row?.servidor?.id ?? '') === String(servidorId)
+    );
     if (byId) return byId;
   }
 
   return rows[0] || null;
 }
 
-async function getConsolidatedFrequenciaByServidor({ ano, mes, servidorId, servidorCpf }) {
+async function getConsolidatedFrequenciaByServidor({
+  ano,
+  mes,
+  servidorId,
+  servidorCpf,
+  categoria,
+  setor,
+  status,
+}) {
   let cpfToUse = servidorCpf ? onlyDigits(servidorCpf) : '';
 
   if (!cpfToUse && servidorId) {
@@ -161,13 +179,20 @@ async function getConsolidatedFrequenciaByServidor({ ano, mes, servidorId, servi
     ano,
     mes,
     cpf: cpfToUse || undefined,
-    status: 'ATIVO',
+    categoria,
+    setor,
+    status,
   });
 
-  const item = extractConsolidatedItem(result, { servidorId, servidorCpf: cpfToUse });
+  const item = extractConsolidatedItem(result, {
+    servidorId,
+    servidorCpf: cpfToUse || servidorCpf,
+  });
 
   if (!item) {
-    throw new Error('Não foi possível localizar a frequência consolidada do servidor informado');
+    throw new Error(
+      'Não foi possível localizar a frequência consolidada do servidor informado'
+    );
   }
 
   return item;
@@ -187,9 +212,10 @@ function buildTemplateDataFromConsolidated(item) {
 }
 
 async function ensureSofficeAvailable() {
-  const commands = process.platform === 'win32'
-    ? ['soffice.exe', 'soffice.com', 'soffice']
-    : ['soffice'];
+  const commands =
+    process.platform === 'win32'
+      ? ['soffice.exe', 'soffice.com', 'soffice']
+      : ['soffice'];
 
   const errors = [];
 
@@ -245,12 +271,21 @@ async function convertDocxBufferToPdfBuffer(docxBuffer, outputBaseName) {
     try {
       await fsp.rm(tempDir, { recursive: true, force: true });
     } catch (_) {
-      // ignore cleanup errors
+      // ignora erro de limpeza
     }
   }
 }
 
-async function exportarFrequencia({ ano, mes, servidorId, servidorCpf, formato }) {
+async function exportarFrequencia({
+  ano,
+  mes,
+  servidorId,
+  servidorCpf,
+  categoria,
+  setor,
+  status,
+  formato,
+}) {
   const year = Number(ano);
   const month = Number(mes);
   const format = String(formato || 'docx').toLowerCase();
@@ -260,7 +295,9 @@ async function exportarFrequencia({ ano, mes, servidorId, servidorCpf, formato }
   }
 
   if (!servidorId && !servidorCpf) {
-    throw new Error('Informe servidorId ou servidorCpf para exportar a frequência individual');
+    throw new Error(
+      'Informe servidorId ou servidorCpf para exportar a frequência individual'
+    );
   }
 
   if (!['docx', 'pdf'].includes(format)) {
@@ -268,25 +305,35 @@ async function exportarFrequencia({ ano, mes, servidorId, servidorCpf, formato }
   }
 
   const templatePath = await resolveTemplatePath();
+
   const consolidated = await getConsolidatedFrequenciaByServidor({
     ano: year,
     mes: month,
     servidorId,
     servidorCpf,
+    categoria,
+    setor,
+    status,
   });
 
   const templateData = buildTemplateDataFromConsolidated(consolidated);
   const templateBinary = await fsp.readFile(templatePath, 'binary');
   const docxBuffer = buildDocxBufferFromTemplate(templateBinary, templateData);
 
-  const baseFileName = getFriendlyFileName(consolidated.servidor, year, month, 'docx').replace(/\.docx$/i, '');
+  const baseFileName = getFriendlyFileName(
+    consolidated.servidor,
+    year,
+    month,
+    'docx'
+  ).replace(/\.docx$/i, '');
 
   if (format === 'docx') {
     return {
       ok: true,
       formato: 'docx',
       fileName: `${baseFileName}.docx`,
-      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       buffer: docxBuffer,
       servidor: consolidated.servidor,
       ano: year,
