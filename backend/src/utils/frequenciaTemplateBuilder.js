@@ -6,7 +6,8 @@ function onlyDigits(value) {
 
 function safeText(value) {
   if (value === null || value === undefined) return '';
-  return String(value).trim();
+  const text = String(value).trim();
+  return text === 'undefined' || text === 'null' ? '' : text;
 }
 
 function monthLabel(month) {
@@ -64,6 +65,18 @@ function getTurnOcorrencia(turno) {
   return safeText(turno?.ocorrencia);
 }
 
+function getTurnEntrada(turno) {
+  return safeText(turno?.entrada);
+}
+
+function getTurnSaida(turno) {
+  return safeText(turno?.saida);
+}
+
+function getTurnAbono(turno) {
+  return safeText(turno?.abono);
+}
+
 function buildEmptyDayPlaceholders(day) {
   return {
     [String(day)]: '',
@@ -80,6 +93,12 @@ function buildEmptyDayPlaceholders(day) {
     [`SA2_${day}`]: '',
     [`A1_${day}`]: '',
     [`A2_${day}`]: '',
+
+    // aliases para templates variados
+    [`H1E_${day}`]: '',
+    [`H1S_${day}`]: '',
+    [`H2E_${day}`]: '',
+    [`H2S_${day}`]: '',
   };
 }
 
@@ -98,11 +117,19 @@ function buildDayPlaceholders(day, dayItem, totalDiasMes) {
   const ocorrencia1 = getTurnOcorrencia(turno1);
   const ocorrencia2 = getTurnOcorrencia(turno2);
 
+  const entrada1 = getTurnEntrada(turno1);
+  const saida1 = getTurnSaida(turno1);
+  const entrada2 = getTurnEntrada(turno2);
+  const saida2 = getTurnSaida(turno2);
+
+  const abono1 = getTurnAbono(turno1);
+  const abono2 = getTurnAbono(turno2);
+
   return {
     [String(day)]: String(day),
     [`D${day}`]: String(day),
 
-    // rubrica "direta" do template oficial
+    // rubrica principal
     [`S${day}`]: rubricaDireta,
     [`R${day}`]: rubricaDireta,
 
@@ -110,17 +137,23 @@ function buildDayPlaceholders(day, dayItem, totalDiasMes) {
     [`O1_${day}`]: ocorrencia1,
     [`O2_${day}`]: ocorrencia2,
 
-    // aliases defensivos, caso o template use nomes alternativos
-    [`T1_${day}`]: rubrica1,
-    [`T2_${day}`]: rubrica2,
+    // aliases defensivos
+    [`T1_${day}`]: '',
+    [`T2_${day}`]: '',
 
-    // campos de batida/abono deixam vazio por enquanto
-    [`E1_${day}`]: safeText(turno1.entrada),
-    [`SA1_${day}`]: safeText(turno1.saida),
-    [`E2_${day}`]: safeText(turno2.entrada),
-    [`SA2_${day}`]: safeText(turno2.saida),
-    [`A1_${day}`]: safeText(turno1.abono),
-    [`A2_${day}`]: safeText(turno2.abono),
+    // horas e abonos - SEMPRE string vazia quando não houver valor
+    [`E1_${day}`]: entrada1,
+    [`SA1_${day}`]: saida1,
+    [`E2_${day}`]: entrada2,
+    [`SA2_${day}`]: saida2,
+    [`A1_${day}`]: abono1,
+    [`A2_${day}`]: abono2,
+
+    // aliases adicionais
+    [`H1E_${day}`]: entrada1,
+    [`H1S_${day}`]: saida1,
+    [`H2E_${day}`]: entrada2,
+    [`H2S_${day}`]: saida2,
   };
 }
 
@@ -135,15 +168,6 @@ function buildHiddenRowsMeta(totalDiasMes) {
   };
 }
 
-/**
- * Builder final do payload do template DOCX oficial
- *
- * @param {object} servidor
- * @param {number} ano
- * @param {number} mes
- * @param {Array} dayItems
- * @returns {object}
- */
 function buildFrequenciaTemplateData(servidor = {}, ano, mes, dayItems = []) {
   const totalDiasMes = getDaysInMonth(Number(ano), Number(mes));
   const dayMap = getDayItemMap(dayItems);
