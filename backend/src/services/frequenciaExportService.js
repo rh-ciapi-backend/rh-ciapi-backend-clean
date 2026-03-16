@@ -10,7 +10,10 @@ const Docxtemplater = require('docxtemplater');
 const { createClient } = require('@supabase/supabase-js');
 
 const { listarFrequenciaMensal } = require('./frequenciaService');
-const { buildFrequenciaTemplateData } = require('../utils/frequenciaTemplateBuilder');
+const {
+  buildFrequenciaTemplateData,
+  sanitizeTemplatePayload,
+} = require('../utils/frequenciaTemplateBuilder');
 
 const execFileAsync = promisify(execFile);
 
@@ -86,7 +89,7 @@ function buildDocxBufferFromTemplate(templateBinary, templateData) {
       },
     });
 
-    doc.render(templateData);
+    doc.render(sanitizeTemplatePayload(templateData));
 
     return doc.getZip().generate({
       type: 'nodebuffer',
@@ -204,7 +207,7 @@ async function getConsolidatedFrequenciaByServidor({
 
 function buildTemplateDataFromConsolidated(item) {
   if (item?.templateData && typeof item.templateData === 'object') {
-    return item.templateData;
+    return sanitizeTemplatePayload(item.templateData);
   }
 
   return buildFrequenciaTemplateData(
