@@ -7,7 +7,9 @@ function onlyDigits(value) {
 function safeText(value) {
   if (value === null || value === undefined) return '';
   const text = String(value).trim();
-  return text === 'undefined' || text === 'null' ? '' : text;
+  if (!text) return '';
+  if (text === 'undefined' || text === 'null') return '';
+  return text;
 }
 
 function normalizeText(value) {
@@ -44,8 +46,8 @@ function normalizeServidorHeader(servidor = {}) {
     CPF: safeText(onlyDigits(servidor.cpf)),
     CARGO: safeText(servidor.cargo),
     CATEGORIA: safeText(servidor.categoria),
-    CH_DIARIA: safeText(servidor.chDiaria),
-    CH_SEMANAL: safeText(servidor.chSemanal),
+    CH_DIARIA: safeText(servidor.chDiaria || servidor.ch_diaria),
+    CH_SEMANAL: safeText(servidor.chSemanal || servidor.ch_semanal),
     UNIDADE: safeText(servidor.unidade || servidor.setor || ''),
     LOTACAO: safeText(servidor.lotacao || servidor.setor || ''),
   };
@@ -64,38 +66,13 @@ function getDayItemMap(dayItems = []) {
   return map;
 }
 
-function buildEmptyDayPlaceholders(day) {
-  return {
-    [String(day)]: '',
-    [`D${day}`]: '',
-    [`S${day}`]: '',
-    [`R${day}`]: '',
-    [`O1_${day}`]: '',
-    [`O2_${day}`]: '',
-    [`T1_${day}`]: '',
-    [`T2_${day}`]: '',
-    [`E1_${day}`]: '',
-    [`SA1_${day}`]: '',
-    [`E2_${day}`]: '',
-    [`SA2_${day}`]: '',
-    [`A1_${day}`]: '',
-    [`A2_${day}`]: '',
-
-    // aliases defensivos para templates variados
-    [`H1E_${day}`]: '',
-    [`H1S_${day}`]: '',
-    [`H2E_${day}`]: '',
-    [`H2S_${day}`]: '',
-  };
-}
-
 function extractTextsFromDayItem(dayItem = {}) {
   const values = [
     dayItem?.rubrica,
     dayItem?.status,
     dayItem?.tipo,
-    dayItem?.observacao,
     dayItem?.descricao,
+    dayItem?.observacao,
     dayItem?.legenda,
     dayItem?.finalStatus,
     dayItem?.final_status,
@@ -114,9 +91,7 @@ function extractTextsFromDayItem(dayItem = {}) {
     dayItem?.turno2?.descricao,
   ];
 
-  return values
-    .map((value) => safeText(value))
-    .filter(Boolean);
+  return values.map(safeText).filter(Boolean);
 }
 
 function hasAny(texts, terms) {
@@ -129,32 +104,40 @@ function hasAny(texts, terms) {
 function resolveRubrica(dayItem = {}) {
   const texts = extractTextsFromDayItem(dayItem);
 
-  if (hasAny(texts, ['FERIAS', 'FÉRIAS'])) {
-    return 'FÉRIAS';
-  }
-
-  if (hasAny(texts, ['PONTO FACULTATIVO', 'FACULTATIVO'])) {
-    return 'PONTO FACULTATIVO';
-  }
-
-  if (hasAny(texts, ['FERIADO'])) {
-    return 'FERIADO';
-  }
-
-  if (hasAny(texts, ['SABADO', 'SÁBADO'])) {
-    return 'SABADO';
-  }
-
-  if (hasAny(texts, ['DOMINGO'])) {
-    return 'DOMINGO';
-  }
+  if (hasAny(texts, ['FERIAS', 'FÉRIAS'])) return 'FÉRIAS';
+  if (hasAny(texts, ['PONTO FACULTATIVO', 'FACULTATIVO'])) return 'PONTO FACULTATIVO';
+  if (hasAny(texts, ['FERIADO'])) return 'FERIADO';
+  if (hasAny(texts, ['SABADO', 'SÁBADO'])) return 'SABADO';
+  if (hasAny(texts, ['DOMINGO'])) return 'DOMINGO';
 
   return '';
 }
 
 function resolveOcorrenciaPorTurno(turno = {}) {
-  const ocorrencia = safeText(turno?.ocorrencia);
-  return ocorrencia || '';
+  return safeText(turno?.ocorrencia);
+}
+
+function buildEmptyDayPlaceholders(day) {
+  return {
+    [String(day)]: '',
+    [`D${day}`]: '',
+    [`S${day}`]: '',
+    [`R${day}`]: '',
+    [`O1_${day}`]: '',
+    [`O2_${day}`]: '',
+    [`T1_${day}`]: '',
+    [`T2_${day}`]: '',
+    [`E1_${day}`]: '',
+    [`SA1_${day}`]: '',
+    [`E2_${day}`]: '',
+    [`SA2_${day}`]: '',
+    [`A1_${day}`]: '',
+    [`A2_${day}`]: '',
+    [`H1E_${day}`]: '',
+    [`H1S_${day}`]: '',
+    [`H2E_${day}`]: '',
+    [`H2S_${day}`]: '',
+  };
 }
 
 function buildDayPlaceholders(day, dayItem, totalDiasMes) {
@@ -173,12 +156,11 @@ function buildDayPlaceholders(day, dayItem, totalDiasMes) {
     [String(day)]: String(day),
     [`D${day}`]: String(day),
 
-    // rubrica principal:
-    // somente sábado, domingo, feriado, ponto facultativo e férias
+    // RUBRICA: só eventos válidos
     [`S${day}`]: rubricaDireta,
     [`R${day}`]: rubricaDireta,
 
-    // ocorrências por turno permanecem separadas
+    // OCORRÊNCIAS por turno preservadas
     [`O1_${day}`]: ocorrencia1,
     [`O2_${day}`]: ocorrencia2,
 
@@ -186,17 +168,17 @@ function buildDayPlaceholders(day, dayItem, totalDiasMes) {
     [`T1_${day}`]: '',
     [`T2_${day}`]: '',
 
-    // horas SEMPRE vazias
+    // HORAS sempre vazias
     [`E1_${day}`]: '',
     [`SA1_${day}`]: '',
     [`E2_${day}`]: '',
     [`SA2_${day}`]: '',
 
-    // abonos vazios para evitar lixo no template
+    // ABONO vazio
     [`A1_${day}`]: '',
     [`A2_${day}`]: '',
 
-    // aliases adicionais de horas também vazios
+    // aliases extras de horas sempre vazios
     [`H1E_${day}`]: '',
     [`H1S_${day}`]: '',
     [`H2E_${day}`]: '',
@@ -218,7 +200,7 @@ function buildHiddenRowsMeta(totalDiasMes) {
 function sanitizeTemplatePayload(payload = {}) {
   const clean = {};
 
-  for (const [key, value] of Object.entries(payload)) {
+  for (const [key, value] of Object.entries(payload || {})) {
     if (value === null || value === undefined) {
       clean[key] = '';
       continue;
