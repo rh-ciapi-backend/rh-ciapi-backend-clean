@@ -109,6 +109,7 @@ const defaultPermissionsByProfile = {
 
 function buildDefaultPermissions(profile) {
   const safeProfile = profile && defaultPermissionsByProfile[profile] ? profile : PROFILES.CONSULTA;
+
   return PERMISSION_MODULES.map((moduleName) => {
     const actions = defaultPermissionsByProfile[safeProfile][moduleName] || [];
     return {
@@ -126,10 +127,13 @@ function normalizePermissions(permissions = [], profile = PROFILES.CONSULTA) {
   return PERMISSION_MODULES.map((moduleName) => {
     const base = defaultMap.get(moduleName);
     const current = incomingMap.get(moduleName) || base || { module: moduleName, actions: [], allowed: false };
-    const allowedActions = Array.from(new Set((current.actions || []).filter((action) => PERMISSION_ACTIONS.includes(action))));
+    const allowedActions = Array.from(
+      new Set((current.actions || []).filter((action) => PERMISSION_ACTIONS.includes(action))),
+    );
+
     return {
       module: moduleName,
-      allowed: current.allowed || allowedActions.length > 0,
+      allowed: Boolean(current.allowed || allowedActions.length > 0),
       actions: allowedActions,
     };
   });
@@ -139,7 +143,13 @@ function isMasterEmail(email = '') {
   return String(email).trim().toLowerCase() === MASTER_EMAIL.toLowerCase();
 }
 
-function assertMasterProtection({ targetUser, actorUser, requestedProfile, requestedStatus, allowDelete = false }) {
+function assertMasterProtection({
+  targetUser,
+  actorUser,
+  requestedProfile,
+  requestedStatus,
+  allowDelete = false,
+}) {
   if (!targetUser?.is_master) return;
 
   if (!actorUser?.is_master) {
