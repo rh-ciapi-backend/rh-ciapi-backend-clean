@@ -1,5 +1,4 @@
 const {
-  MASTER_EMAIL,
   PROFILES,
   buildDefaultPermissions,
   normalizePermissions,
@@ -27,8 +26,7 @@ function normalizeManagedUser(record, permissions = []) {
     email: record.email,
     perfil: record.perfil,
     status: record.status,
-    setor_id: record.setor_id,
-    setor_nome: record.setores?.nome || null,
+    setor_nome: record.setor_nome || null,
     ultimo_login_em: record.ultimo_login_em,
     tentativas_login_falhas: record.tentativas_login_falhas || 0,
     bloqueado_ate: record.bloqueado_ate,
@@ -42,26 +40,23 @@ function normalizeManagedUser(record, permissions = []) {
 async function getUsersWithPermissions(supabase, filters = {}) {
   let query = supabase
     .from('system_users')
-    .select(`
-      *,
-      setores:setor_id (
-        id,
-        nome
-      )
-    `)
+    .select('*')
     .order('nome_completo', { ascending: true });
 
   if (filters.termo) {
-    query = query.or(`nome_completo.ilike.%${filters.termo}%,email.ilike.%${filters.termo}%`);
+    query = query.or(`nome_completo.ilike.%${filters.termo}%,email.ilike.%${filters.termo}%,setor_nome.ilike.%${filters.termo}%`);
   }
+
   if (filters.perfil) {
     query = query.eq('perfil', filters.perfil);
   }
+
   if (filters.status) {
     query = query.eq('status', filters.status);
   }
-  if (filters.setorId) {
-    query = query.eq('setor_id', filters.setorId);
+
+  if (filters.setorNome) {
+    query = query.ilike('setor_nome', `%${filters.setorNome}%`);
   }
 
   const { data: users, error } = await query;
@@ -116,6 +111,25 @@ async function getTodayLogsCount(supabase) {
   return data || [];
 }
 
+async function getUserPermissions(supabase, userId, profile) {
+  const { data, error } = await supabase
+    .from('user_permissions')
+    .select('*')
+    .eq('user_id', userId);
+
+  if (error) throw error;
+
+  return data && data.length > 0
+    ? data.map((item) => ({
+        id: item.id,
+        user_id: item.user_id,
+        module: item.module,
+        actions: item.actions || [],
+        allowed: item.allowed,
+      }))
+    : buildDefaultPermissions(profile);
+}
+
 async function getCurrentActor(supabase, authUser) {
   const { data, error } = await supabase
     .from('system_users')
@@ -142,32 +156,20 @@ async function getCurrentActor(supabase, authUser) {
     perfil: isMasterEmail(authUser.email) ? PROFILES.MASTER : PROFILES.CONSULTA,
     status: 'ATIVO',
     is_master: isMasterEmail(authUser.email),
-    permissions: buildDefaultPermissions(isMasterEmail(authUser.email) ? PROFILES.MASTER : PROFILES.CONSULTA),
+    permissions: buildDefaultPermissions(
+      isMasterEmail(authUser.email) ? PROFILES.MASTER : PROFILES.CONSULTA,
+    ),
   };
-}
-
-async function getUserPermissions(supabase, userId, profile) {
-  const { data, error } = await supabase
-    .from('user_permissions')
-    .select('*')
-    .eq('user_id', userId);
-
-  if (error) throw error;
-  return data && data.length > 0
-    ? data.map((item) => ({
-        id: item.id,
-        user_id: item.user_id,
-        module: item.module,
-        actions: item.actions || [],
-        allowed: item.allowed,
-      }))
-    : buildDefaultPermissions(profile);
 }
 
 async function upsertPermissions(supabase, userId, permissions, profile) {
   const normalized = normalizePermissions(permissions, profile);
 
-  const { error: deleteError } = await supabase.from('user_permissions').delete().eq('user_id', userId);
+  const { error: deleteError } = await supabase
+    .from('user_permissions')
+    .delete()
+    .eq('user_id', userId);
+
   if (deleteError) throw deleteError;
 
   const payload = normalized.map((permission) => ({
@@ -177,8 +179,10 @@ async function upsertPermissions(supabase, userId, permissions, profile) {
     actions: permission.actions,
   }));
 
-  const { error } = await supabase.from('user_permissions').insert(payload);
-  if (error) throw error;
+  if (payload.length > 0) {
+    const { error } = await supabase.from('user_permissions').insert(payload);
+    if (error) throw error;
+  }
 
   return normalized;
 }
@@ -186,6 +190,7 @@ async function upsertPermissions(supabase, userId, permissions, profile) {
 async function listUsers(supabase, filters = {}) {
   const users = await getUsersWithPermissions(supabase, filters);
   const logs = await getTodayLogsCount(supabase);
+
   return {
     users,
     stats: buildStats(users, logs),
@@ -195,17 +200,12 @@ async function listUsers(supabase, filters = {}) {
 async function getUserById(supabase, userId) {
   const { data, error } = await supabase
     .from('system_users')
-    .select(`
-      *,
-      setores:setor_id (
-        id,
-        nome
-      )
-    `)
+    .select('*')
     .eq('id', userId)
     .single();
 
   if (error) throw error;
+
   const permissions = await getUserPermissions(supabase, data.id, data.perfil);
   return normalizeManagedUser(data, permissions);
 }
@@ -213,7 +213,12 @@ async function getUserById(supabase, userId) {
 async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
   const actor = await getCurrentActor(supabase, authAdmin);
 
-  if (!actor.is_master && !(actor.permissions || []).some((item) => item.module === 'administracao' && item.actions.includes('gerenciar_usuarios'))) {
+  if (
+    !actor.is_master &&
+    !(actor.permissions || []).some(
+      (item) => item.module === 'administracao' && item.actions.includes('gerenciar_usuarios'),
+    )
+  ) {
     const error = new Error('Você não possui permissão para criar usuários.');
     error.statusCode = 403;
     throw error;
@@ -223,6 +228,7 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
   const isMaster = isMasterEmail(email);
   const perfil = isMaster ? PROFILES.MASTER : payload.perfil || PROFILES.CONSULTA;
   const status = isMaster ? 'ATIVO' : payload.status || 'ATIVO';
+  const setor_nome = payload.setor_nome ? String(payload.setor_nome).trim() : null;
 
   const { data: existing, error: existingError } = await supabase
     .from('system_users')
@@ -231,6 +237,7 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
     .maybeSingle();
 
   if (existingError) throw existingError;
+
   if (existing) {
     const error = new Error('Já existe um usuário cadastrado com este e-mail.');
     error.statusCode = 409;
@@ -245,7 +252,7 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
       email,
       perfil,
       status,
-      setor_id: payload.setor_id || null,
+      setor_nome,
       is_master: isMaster,
       tentativas_login_falhas: 0,
     })
@@ -271,7 +278,7 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
     metadata: {
       perfil,
       status,
-      setor_id: payload.setor_id || null,
+      setor_nome,
     },
   });
 
@@ -299,6 +306,12 @@ async function updateUser({ supabase, authAdmin, auditLog, payload, userId, req 
   const willBeMaster = isMasterEmail(nextEmail);
   const nextProfile = willBeMaster ? PROFILES.MASTER : payload.perfil || targetUser.perfil;
   const nextStatus = willBeMaster ? 'ATIVO' : payload.status || targetUser.status;
+  const nextSetorNome =
+    payload.setor_nome === undefined
+      ? targetUser.setor_nome
+      : payload.setor_nome
+        ? String(payload.setor_nome).trim()
+        : null;
 
   const { data, error } = await supabase
     .from('system_users')
@@ -307,7 +320,7 @@ async function updateUser({ supabase, authAdmin, auditLog, payload, userId, req 
       email: nextEmail,
       perfil: nextProfile,
       status: nextStatus,
-      setor_id: payload.setor_id === undefined ? targetUser.setor_id : payload.setor_id || null,
+      setor_nome: nextSetorNome,
       is_master: willBeMaster,
       updated_at: new Date().toISOString(),
     })
@@ -336,6 +349,8 @@ async function updateUser({ supabase, authAdmin, auditLog, payload, userId, req 
       next_profile: nextProfile,
       previous_status: targetUser.status,
       next_status: nextStatus,
+      previous_setor_nome: targetUser.setor_nome,
+      next_setor_nome: nextSetorNome,
     },
   });
 
@@ -390,10 +405,18 @@ async function deleteUser({ supabase, authAdmin, auditLog, userId, req }) {
     allowDelete: true,
   });
 
-  const { error: deletePermissionsError } = await supabase.from('user_permissions').delete().eq('user_id', userId);
+  const { error: deletePermissionsError } = await supabase
+    .from('user_permissions')
+    .delete()
+    .eq('user_id', userId);
+
   if (deletePermissionsError) throw deletePermissionsError;
 
-  const { error } = await supabase.from('system_users').delete().eq('id', userId);
+  const { error } = await supabase
+    .from('system_users')
+    .delete()
+    .eq('id', userId);
+
   if (error) throw error;
 
   await auditLog(req, {
@@ -405,6 +428,7 @@ async function deleteUser({ supabase, authAdmin, auditLog, userId, req }) {
     description: `Usuário ${targetUser.email} excluído por ${actor.email}.`,
     metadata: {
       perfil: targetUser.perfil,
+      setor_nome: targetUser.setor_nome,
     },
   });
 
@@ -430,6 +454,7 @@ async function resetPassword({ supabase, authAdmin, userId, newPassword, auditLo
     const { error } = await supabase.auth.admin.updateUserById(targetUser.auth_user_id, {
       password: newPassword,
     });
+
     if (error) throw error;
   }
 
@@ -453,14 +478,19 @@ async function listLogs(supabase, filters = {}) {
     .order('created_at', { ascending: false });
 
   if (filters.search) {
-    query = query.or(`actor_email.ilike.%${filters.search}%,description.ilike.%${filters.search}%,entity_label.ilike.%${filters.search}%`);
+    query = query.or(
+      `actor_email.ilike.%${filters.search}%,description.ilike.%${filters.search}%,entity_label.ilike.%${filters.search}%`,
+    );
   }
+
   if (filters.module) {
     query = query.ilike('module', `%${filters.module}%`);
   }
+
   if (filters.action) {
     query = query.ilike('action', `%${filters.action}%`);
   }
+
   if (filters.limit) {
     query = query.limit(Number(filters.limit));
   } else {
