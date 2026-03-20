@@ -41,8 +41,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
 const supabase = createClient(SUPABASE_URL || "", SUPABASE_SERVICE_KEY || "");
 app.locals.supabase = supabase;
 
-const exportDir =
-  process.env.EXPORT_DIR || path.join("/tmp", "exports");
+const exportDir = process.env.EXPORT_DIR || path.join("/tmp", "exports");
 
 try {
   if (!fs.existsSync(exportDir)) {
@@ -81,6 +80,11 @@ const frequenciaExportRoutes = safeRequire(
   "frequenciaExportRoutes"
 );
 
+const adminRoutes = safeRequire(
+  "./src/routes/adminRoutes",
+  "adminRoutes"
+);
+
 app.get("/", (_req, res) => {
   return res.status(200).send("RH CIAPI Backend OK");
 });
@@ -95,6 +99,7 @@ app.get("/health", (_req, res) => {
       feriasExport: Boolean(feriasExportRoutes),
       frequencia: Boolean(frequenciaRoutes),
       frequenciaExport: Boolean(frequenciaExportRoutes),
+      administracao: Boolean(adminRoutes),
     },
   });
 });
@@ -143,6 +148,12 @@ if (frequenciaExportRoutes) {
   console.warn("[BOOT] Rotas de exportação da frequência não registradas.");
 }
 
+if (adminRoutes) {
+  app.use("/api/admin", adminRoutes);
+} else {
+  console.warn("[BOOT] Rotas de administração não registradas.");
+}
+
 app.use((req, res) => {
   return res.status(404).json({
     ok: false,
@@ -173,4 +184,6 @@ app.listen(PORT, () => {
   console.log("Frequência: GET /api/frequencia");
   console.log("Exportação de frequência: POST /api/frequencia/exportar");
   console.log("Exportação de férias: POST /api/ferias/exportar");
+  console.log("Administração: GET /api/admin/users");
+  console.log("Logs de auditoria: GET /api/admin/logs");
 });
