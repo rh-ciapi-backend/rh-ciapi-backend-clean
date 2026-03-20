@@ -22,13 +22,16 @@ async function authenticate(req, res, next) {
     }
 
     const { data, error } = await supabase.auth.getUser(token);
+
     if (error || !data?.user) {
       return res.status(401).json({ error: 'Token inválido.' });
     }
 
     const currentUser = await adminUsersService.getCurrentActor(supabase, data.user);
+
     req.authUser = data.user;
     req.currentUser = currentUser;
+
     return next();
   } catch (error) {
     return next(error);
@@ -42,9 +45,10 @@ router.get('/users', requirePermission('administracao', 'visualizar'), async (re
     const response = await adminUsersService.listUsers(supabase, {
       termo: req.query.termo,
       perfil: req.query.perfil,
-      setorId: req.query.setorId,
+      setorNome: req.query.setorNome,
       status: req.query.status,
     });
+
     res.json(response);
   } catch (error) {
     next(error);
@@ -93,22 +97,26 @@ router.put('/users/:id', requirePermission('administracao', 'gerenciar_usuarios'
   }
 });
 
-router.patch('/users/:id/status', requirePermission('administracao', 'gerenciar_usuarios'), async (req, res, next) => {
-  try {
-    const user = await adminUsersService.updateUserStatus({
-      supabase,
-      authAdmin: req.authUser,
-      auditLog,
-      userId: req.params.id,
-      status: req.body.status,
-      req,
-    });
+router.patch(
+  '/users/:id/status',
+  requirePermission('administracao', 'gerenciar_usuarios'),
+  async (req, res, next) => {
+    try {
+      const user = await adminUsersService.updateUserStatus({
+        supabase,
+        authAdmin: req.authUser,
+        auditLog,
+        userId: req.params.id,
+        status: req.body.status,
+        req,
+      });
 
-    res.json({ ok: true, user });
-  } catch (error) {
-    next(error);
-  }
-});
+      res.json({ ok: true, user });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 router.delete('/users/:id', requirePermission('administracao', 'gerenciar_usuarios'), async (req, res, next) => {
   try {
@@ -126,22 +134,26 @@ router.delete('/users/:id', requirePermission('administracao', 'gerenciar_usuari
   }
 });
 
-router.post('/users/:id/reset-password', requirePermission('administracao', 'gerenciar_usuarios'), async (req, res, next) => {
-  try {
-    const response = await adminUsersService.resetPassword({
-      supabase,
-      authAdmin: req.authUser,
-      userId: req.params.id,
-      newPassword: req.body.newPassword,
-      auditLog,
-      req,
-    });
+router.post(
+  '/users/:id/reset-password',
+  requirePermission('administracao', 'gerenciar_usuarios'),
+  async (req, res, next) => {
+    try {
+      const response = await adminUsersService.resetPassword({
+        supabase,
+        authAdmin: req.authUser,
+        userId: req.params.id,
+        newPassword: req.body.newPassword,
+        auditLog,
+        req,
+      });
 
-    res.json(response);
-  } catch (error) {
-    next(error);
-  }
-});
+      res.json(response);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 router.get('/logs', requirePermission('administracao', 'visualizar'), async (req, res, next) => {
   try {
@@ -160,6 +172,7 @@ router.get('/logs', requirePermission('administracao', 'visualizar'), async (req
 
 router.use((error, req, res, next) => {
   console.error('[adminRoutes]', error);
+
   res.status(error.statusCode || 500).json({
     error: error.message || 'Erro interno no módulo de administração.',
   });
