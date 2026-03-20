@@ -11,6 +11,7 @@ function createAuditLogger(supabase) {
   return async function auditLog(req, payload = {}) {
     try {
       const currentUser = req.currentUser || {};
+
       await supabase.from('audit_logs').insert({
         actor_user_id: currentUser.id || null,
         actor_email: currentUser.email || null,
