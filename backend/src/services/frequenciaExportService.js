@@ -14,6 +14,7 @@ const {
   buildFrequenciaTemplateData,
   sanitizeTemplatePayload,
 } = require('../utils/frequenciaTemplateBuilder');
+const { createZipFromEntries } = require('../utils/zipBufferHelper');
 
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +22,8 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
+
+const SMALL_BATCH_SINGLE_FILE_LIMIT = 1;
 
 function onlyDigits(value) {
   return String(value || '').replace(/\D/g, '');
@@ -43,11 +46,75 @@ function slugify(value) {
     .replace(/(^-|-$)/g, '') || 'servidor';
 }
 
+function normalizeExportFormat(formato) {
+  const format = String(formato || 'docx').toLowerCase();
+  if (!['docx', 'pdf'].includes(format)) {
+    throw new Error('Formato inválido. Use "docx" ou "pdf"');
+  }
+  return format;
+}
+
+function normalizeExportMode(modoExportacao, escopoExportacao, payload) {
+  const explicitScope = safeText(escopoExportacao);
+  const explicitMode = safeText(modoExportacao);
+
+  if (explicitMode === 'lote') return 'lote';
+  if (explicitMode === 'individual') return 'individual';
+  if (explicitScope && explicitScope !== 'servidor_selecionado') return 'lote';
+  if (payload?.usarFiltrosAtuais) return 'lote';
+  if (Array.isArray(payload?.servidoresCpf) && payload.servidoresCpf.length) return 'lote';
+  if (Array.isArray(payload?.servidoresIds) && payload.servidoresIds.length) return 'lote';
+  return 'individual';
+}
+
+function normalizeScope(scope) {
+  const value = safeText(scope) || 'servidor_selecionado';
+  const allowed = new Set([
+    'servidor_selecionado',
+    'todos_ativos',
+    'todos_inativos',
+    'todos',
+    'categoria',
+    'setor',
+    'filtros_atuais',
+  ]);
+
+  if (!allowed.has(value)) {
+    throw new Error(`Escopo de exportação inválido: ${value}`);
+  }
+
+  return value;
+}
+
 function getFriendlyFileName(servidor, ano, mes, ext) {
   const nome = slugify(servidor?.nome || 'servidor');
   const yyyy = String(ano).padStart(4, '0');
   const mm = String(mes).padStart(2, '0');
   return `frequencia_${nome}_${yyyy}_${mm}.${ext}`;
+}
+
+function buildBatchBaseName({ ano, mes, status, categoria, setor, escopoExportacao }) {
+  const yyyy = String(ano).padStart(4, '0');
+  const mm = String(mes).padStart(2, '0');
+  const statusSlug = slugify(status);
+  const categoriaSlug = slugify(categoria);
+  const setorSlug = slugify(setor);
+
+  switch (escopoExportacao) {
+    case 'todos_ativos':
+      return `frequencias_ativos_${yyyy}_${mm}`;
+    case 'todos_inativos':
+      return `frequencias_inativos_${yyyy}_${mm}`;
+    case 'categoria':
+      return `frequencias_categoria_${categoriaSlug || 'geral'}_${yyyy}_${mm}`;
+    case 'setor':
+      return `frequencias_setor_${setorSlug || 'geral'}_${yyyy}_${mm}`;
+    case 'filtros_atuais':
+      return `frequencias_filtradas_${statusSlug || 'todos'}_${yyyy}_${mm}`;
+    case 'todos':
+    default:
+      return `frequencias_todos_${yyyy}_${mm}`;
+  }
 }
 
 function resolveTemplateCandidates() {
@@ -190,14 +257,16 @@ async function findServidorBase({ servidorId, servidorCpf }) {
   return null;
 }
 
-function extractConsolidatedItem(result, { servidorId, servidorCpf }) {
-  const wrapper = result?.data;
-  const rows = Array.isArray(wrapper)
-    ? wrapper
-    : Array.isArray(wrapper?.data)
-    ? wrapper.data
-    : [];
+function extractRowsFromListar(payload) {
+  const wrapper = payload?.data;
+  if (Array.isArray(wrapper)) return wrapper;
+  if (Array.isArray(wrapper?.data)) return wrapper.data;
+  if (Array.isArray(payload?.items)) return payload.items;
+  return [];
+}
 
+function extractConsolidatedItem(result, { servidorId, servidorCpf }) {
+  const rows = extractRowsFromListar(result);
   const cpf = onlyDigits(servidorCpf);
 
   if (cpf) {
@@ -210,9 +279,10 @@ function extractConsolidatedItem(result, { servidorId, servidorCpf }) {
       (row) =>
         String(
           row?.servidor?.id ??
-          row?.servidor?.servidor ??
-          row?.servidor?.uuid ??
-          ''
+            row?.servidor?.servidor ??
+            row?.servidor?.uuid ??
+            row?.servidor?.servidor_id ??
+            ''
         ) === String(servidorId)
     );
     if (byId) return byId;
@@ -273,7 +343,6 @@ function buildTemplateDataFromConsolidated(item) {
       ? deepSanitize(item.templateData)
       : {};
 
-  // prioridade do builder para garantir horas vazias e rubrica correta
   const merged = {
     ...rawTemplateData,
     ...fromBuilder,
@@ -316,14 +385,7 @@ async function convertDocxBufferToPdfBuffer(docxBuffer, outputBaseName) {
 
     await execFileAsync(
       sofficeCmd,
-      [
-        '--headless',
-        '--convert-to',
-        'pdf',
-        '--outdir',
-        tempDir,
-        docxPath,
-      ],
+      ['--headless', '--convert-to', 'pdf', '--outdir', tempDir, docxPath],
       {
         timeout: 120000,
         windowsHide: true,
@@ -347,87 +409,291 @@ async function convertDocxBufferToPdfBuffer(docxBuffer, outputBaseName) {
   }
 }
 
-async function exportarFrequencia({
-  ano,
-  mes,
-  servidorId,
-  servidorCpf,
-  categoria,
-  setor,
-  status,
-  formato,
-}) {
-  const year = Number(ano);
-  const month = Number(mes);
-  const format = String(formato || 'docx').toLowerCase();
+function buildSelectionContext(payload = {}) {
+  const status = safeText(payload.status);
+  const categoria = safeText(payload.categoria);
+  const setor = safeText(payload.setor);
+  const explicitCpfList = Array.isArray(payload.servidoresCpf)
+    ? payload.servidoresCpf.map(onlyDigits).filter(Boolean)
+    : [];
+  const explicitIdList = Array.isArray(payload.servidoresIds)
+    ? payload.servidoresIds.map((item) => String(item)).filter(Boolean)
+    : [];
 
-  if (!year || !month) {
-    throw new Error('Os campos ano e mes são obrigatórios');
-  }
+  const explicitCpfSet = new Set(explicitCpfList);
+  const explicitIdSet = new Set(explicitIdList);
 
-  if (!servidorId && !servidorCpf) {
-    throw new Error(
-      'Informe servidorId ou servidorCpf para exportar a frequência individual'
-    );
-  }
-
-  if (!['docx', 'pdf'].includes(format)) {
-    throw new Error('Formato inválido. Use "docx" ou "pdf"');
-  }
-
-  const templatePath = await resolveTemplatePath();
-
-  const consolidated = await getConsolidatedFrequenciaByServidor({
-    ano: year,
-    mes: month,
-    servidorId,
-    servidorCpf,
+  return {
+    status,
     categoria,
     setor,
-    status,
+    explicitCpfSet,
+    explicitIdSet,
+    usarFiltrosAtuais: Boolean(payload.usarFiltrosAtuais),
+  };
+}
+
+function applyScopeToFilters(scope, selectionContext) {
+  const filters = {
+    status: selectionContext.status || undefined,
+    categoria: selectionContext.categoria || undefined,
+    setor: selectionContext.setor || undefined,
+  };
+
+  if (scope === 'todos_ativos') {
+    filters.status = 'ATIVO';
+  } else if (scope === 'todos_inativos') {
+    filters.status = 'INATIVO';
+  } else if (scope === 'todos') {
+    filters.status = undefined;
+    filters.categoria = undefined;
+    filters.setor = undefined;
+  } else if (scope === 'categoria') {
+    if (!filters.categoria) {
+      throw new Error('Informe uma categoria para exportação em lote por categoria.');
+    }
+  } else if (scope === 'setor') {
+    if (!filters.setor) {
+      throw new Error('Informe um setor para exportação em lote por setor.');
+    }
+  }
+
+  return filters;
+}
+
+function filterRowsByExplicitSelection(rows, selectionContext) {
+  const hasExplicitCpf = selectionContext.explicitCpfSet.size > 0;
+  const hasExplicitId = selectionContext.explicitIdSet.size > 0;
+
+  if (!hasExplicitCpf && !hasExplicitId) {
+    return rows;
+  }
+
+  return rows.filter((row) => {
+    const cpf = onlyDigits(row?.servidor?.cpf);
+    const id = String(
+      row?.servidor?.id ??
+        row?.servidor?.servidor ??
+        row?.servidor?.uuid ??
+        row?.servidor?.servidor_id ??
+        ''
+    );
+
+    return (
+      (hasExplicitCpf && cpf && selectionContext.explicitCpfSet.has(cpf)) ||
+      (hasExplicitId && id && selectionContext.explicitIdSet.has(id))
+    );
+  });
+}
+
+async function getBatchConsolidatedItems({ ano, mes, escopoExportacao, payload }) {
+  const selectionContext = buildSelectionContext(payload);
+  const filters = applyScopeToFilters(escopoExportacao, selectionContext);
+
+  const result = await listarFrequenciaMensal({
+    ano,
+    mes,
+    categoria: filters.categoria,
+    setor: filters.setor,
+    status: filters.status,
   });
 
-  const templateData = buildTemplateDataFromConsolidated(consolidated);
-  const templateBinary = await fsp.readFile(templatePath);
+  const rows = filterRowsByExplicitSelection(
+    extractRowsFromListar(result),
+    selectionContext
+  );
+
+  if (!rows.length) {
+    throw new Error('Nenhum servidor encontrado para a exportação em lote com os filtros informados.');
+  }
+
+  return {
+    rows,
+    effectiveFilters: filters,
+  };
+}
+
+async function buildRenderedDocumentItem({ item, ano, mes, formato, templateBinary }) {
+  const templateData = buildTemplateDataFromConsolidated(item);
   const docxBuffer = buildDocxBufferFromTemplate(templateBinary, templateData);
+  const baseFileName = getFriendlyFileName(item?.servidor, ano, mes, 'docx').replace(/\.docx$/i, '');
 
-  const baseFileName = getFriendlyFileName(
-    consolidated.servidor,
-    year,
-    month,
-    'docx'
-  ).replace(/\.docx$/i, '');
-
-  if (format === 'docx') {
+  if (formato === 'docx') {
     return {
-      ok: true,
-      formato: 'docx',
       fileName: `${baseFileName}.docx`,
-      mimeType:
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       buffer: docxBuffer,
-      servidor: consolidated.servidor,
-      ano: year,
-      mes: month,
-      templatePath,
+      servidor: item?.servidor || {},
     };
   }
 
   const pdfBuffer = await convertDocxBufferToPdfBuffer(docxBuffer, baseFileName);
 
   return {
-    ok: true,
-    formato: 'pdf',
     fileName: `${baseFileName}.pdf`,
     mimeType: 'application/pdf',
     buffer: pdfBuffer,
+    servidor: item?.servidor || {},
+  };
+}
+
+async function exportarFrequenciaIndividual(payload) {
+  const year = Number(payload.ano);
+  const month = Number(payload.mes);
+  const format = normalizeExportFormat(payload.formato);
+
+  if (!year || !month) {
+    throw new Error('Os campos ano e mes são obrigatórios');
+  }
+
+  if (!payload.servidorId && !payload.servidorCpf) {
+    throw new Error('Informe servidorId ou servidorCpf para exportar a frequência individual');
+  }
+
+  const templatePath = await resolveTemplatePath();
+  const templateBinary = await fsp.readFile(templatePath);
+
+  const consolidated = await getConsolidatedFrequenciaByServidor({
+    ano: year,
+    mes: month,
+    servidorId: payload.servidorId,
+    servidorCpf: payload.servidorCpf,
+    categoria: payload.categoria,
+    setor: payload.setor,
+    status: payload.status,
+  });
+
+  const rendered = await buildRenderedDocumentItem({
+    item: consolidated,
+    ano: year,
+    mes: month,
+    formato: format,
+    templateBinary,
+  });
+
+  return {
+    ok: true,
+    modoExportacao: 'individual',
+    formato: format,
+    fileName: rendered.fileName,
+    mimeType: rendered.mimeType,
+    buffer: rendered.buffer,
     servidor: consolidated.servidor,
     ano: year,
     mes: month,
+    totalArquivos: 1,
     templatePath,
   };
 }
 
+async function exportarFrequenciaLote(payload) {
+  const year = Number(payload.ano);
+  const month = Number(payload.mes);
+  const format = normalizeExportFormat(payload.formato);
+  const escopoExportacao = normalizeScope(payload.escopoExportacao || 'filtros_atuais');
+
+  if (!year || !month) {
+    throw new Error('Os campos ano e mes são obrigatórios');
+  }
+
+  const templatePath = await resolveTemplatePath();
+  const templateBinary = await fsp.readFile(templatePath);
+
+  const { rows, effectiveFilters } = await getBatchConsolidatedItems({
+    ano: year,
+    mes: month,
+    escopoExportacao,
+    payload,
+  });
+
+  if (rows.length <= SMALL_BATCH_SINGLE_FILE_LIMIT) {
+    const renderedSingle = await buildRenderedDocumentItem({
+      item: rows[0],
+      ano: year,
+      mes: month,
+      formato: format,
+      templateBinary,
+    });
+
+    return {
+      ok: true,
+      modoExportacao: 'lote',
+      estrategia: 'arquivo_unico',
+      escopoExportacao,
+      formato: format,
+      fileName: renderedSingle.fileName,
+      mimeType: renderedSingle.mimeType,
+      buffer: renderedSingle.buffer,
+      ano: year,
+      mes: month,
+      totalArquivos: 1,
+      totalServidores: 1,
+      templatePath,
+      filtrosAplicados: effectiveFilters,
+    };
+  }
+
+  const renderedEntries = [];
+
+  for (const row of rows) {
+    const rendered = await buildRenderedDocumentItem({
+      item: row,
+      ano: year,
+      mes: month,
+      formato: format,
+      templateBinary,
+    });
+
+    renderedEntries.push({
+      name: rendered.fileName,
+      data: rendered.buffer,
+    });
+  }
+
+  const zipBuffer = createZipFromEntries(renderedEntries);
+  const batchBaseName = buildBatchBaseName({
+    ano: year,
+    mes: month,
+    status: effectiveFilters.status,
+    categoria: effectiveFilters.categoria,
+    setor: effectiveFilters.setor,
+    escopoExportacao,
+  });
+
+  return {
+    ok: true,
+    modoExportacao: 'lote',
+    estrategia: 'zip',
+    escopoExportacao,
+    formato: format,
+    fileName: `${batchBaseName}.zip`,
+    mimeType: 'application/zip',
+    buffer: zipBuffer,
+    ano: year,
+    mes: month,
+    totalArquivos: renderedEntries.length,
+    totalServidores: rows.length,
+    templatePath,
+    filtrosAplicados: effectiveFilters,
+  };
+}
+
+async function exportarFrequencia(payload) {
+  const mode = normalizeExportMode(
+    payload?.modoExportacao,
+    payload?.escopoExportacao,
+    payload || {}
+  );
+
+  if (mode === 'lote') {
+    return exportarFrequenciaLote(payload || {});
+  }
+
+  return exportarFrequenciaIndividual(payload || {});
+}
+
 module.exports = {
   exportarFrequencia,
+  exportarFrequenciaIndividual,
+  exportarFrequenciaLote,
 };
