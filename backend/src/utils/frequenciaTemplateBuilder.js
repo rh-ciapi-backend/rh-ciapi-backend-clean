@@ -41,10 +41,10 @@ function monthLabel(month) {
 
 function normalizeServidorHeader(servidor = {}) {
   return {
-    NOME: safeText(servidor.nome),
+    NOME: safeText(servidor.nome || servidor.nome_completo),
     MATRICULA: safeText(servidor.matricula),
     CPF: safeText(onlyDigits(servidor.cpf)),
-    CARGO: safeText(servidor.cargo),
+    CARGO: safeText(servidor.cargo || servidor.funcao),
     CATEGORIA: safeText(servidor.categoria),
     CH_DIARIA: safeText(servidor.chDiaria || servidor.ch_diaria),
     CH_SEMANAL: safeText(servidor.chSemanal || servidor.ch_semanal),
@@ -79,12 +79,10 @@ function extractTextsFromDayItem(dayItem = {}) {
     dayItem?.evento,
     dayItem?.eventoTipo,
     dayItem?.evento_titulo,
-
     dayItem?.turno1?.rubrica,
     dayItem?.turno1?.ocorrencia,
     dayItem?.turno1?.tipo,
     dayItem?.turno1?.descricao,
-
     dayItem?.turno2?.rubrica,
     dayItem?.turno2?.ocorrencia,
     dayItem?.turno2?.tipo,
@@ -107,10 +105,11 @@ function resolveRubrica(dayItem = {}) {
   if (hasAny(texts, ['FERIAS', 'FÉRIAS'])) return 'FÉRIAS';
   if (hasAny(texts, ['PONTO FACULTATIVO', 'FACULTATIVO'])) return 'PONTO FACULTATIVO';
   if (hasAny(texts, ['FERIADO'])) return 'FERIADO';
+  if (hasAny(texts, ['ANIVERSARIO', 'ANIVERSÁRIO'])) return 'ANIVERSÁRIO';
   if (hasAny(texts, ['SABADO', 'SÁBADO'])) return 'SABADO';
   if (hasAny(texts, ['DOMINGO'])) return 'DOMINGO';
 
-  return '';
+  return safeText(dayItem?.rubrica || dayItem?.turno1?.rubrica || dayItem?.turno2?.rubrica || '');
 }
 
 function resolveHorasPlaceholder(rubrica) {
@@ -159,25 +158,15 @@ function buildDayPlaceholders(day, dayItem, totalDiasMes) {
   return {
     [String(day)]: String(day),
     [`D${day}`]: String(day),
-
-    // Horas do template oficial: {{T1}} até {{T31}}
-    // Só recebem traços quando houver sábado, domingo, feriado, férias ou facultativo.
     [`T${day}`]: horasPlaceholder,
-
-    // Rubrica do servidor
     [`S${day}`]: rubricaDireta,
     [`R${day}`]: rubricaDireta,
-
-    // Ocorrências por turno
     [`O1_${day}`]: ocorrencia1,
     [`O2_${day}`]: ocorrencia2,
-
-    // Placeholders alternativos de hora ficam vazios para não poluir o DOCX
     [`E1_${day}`]: '',
     [`SA1_${day}`]: '',
     [`E2_${day}`]: '',
     [`SA2_${day}`]: '',
-
     [`A1_${day}`]: '',
     [`A2_${day}`]: '',
     [`H1E_${day}`]: '',
@@ -221,7 +210,6 @@ function sanitizeTemplatePayload(payload = {}) {
 function buildFrequenciaTemplateData(servidor = {}, ano, mes, dayItems = []) {
   const totalDiasMes = getDaysInMonth(Number(ano), Number(mes));
   const dayMap = getDayItemMap(dayItems);
-
   const header = normalizeServidorHeader(servidor);
 
   const payload = {
