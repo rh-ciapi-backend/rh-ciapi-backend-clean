@@ -18,12 +18,37 @@ const corsOrigins = (process.env.CORS_ORIGINS || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+
+  if (corsOrigins.length === 0) return true;
+
+  if (corsOrigins.includes(origin)) return true;
+
+  try {
+    const url = new URL(origin);
+    const hostname = String(url.hostname || "").toLowerCase();
+
+    if (
+      hostname.endsWith(".vercel.app") &&
+      hostname.includes("rh-ciapi-frontend")
+    ) {
+      return true;
+    }
+  } catch (_error) {
+    return false;
+  }
+
+  return false;
+}
+
 app.use(
   cors({
     origin(origin, cb) {
-      if (!origin) return cb(null, true);
-      if (corsOrigins.length === 0) return cb(null, true);
-      if (corsOrigins.includes(origin)) return cb(null, true);
+      if (isAllowedOrigin(origin)) {
+        return cb(null, true);
+      }
+
       return cb(new Error(`CORS bloqueado: ${origin}`));
     },
     credentials: true,
@@ -95,6 +120,10 @@ app.get("/health", (_req, res) => {
     service: "rh-ciapi-backend",
     time: new Date().toISOString(),
     exportDir,
+    cors: {
+      configuredOrigins: corsOrigins,
+      previewVercelEnabled: true,
+    },
     routes: {
       feriasExport: Boolean(feriasExportRoutes),
       frequencia: Boolean(frequenciaRoutes),
@@ -168,12 +197,16 @@ app.use((err, _req, res, next) => {
     return next(err);
   }
 
-  return res.status(500).json({
+  const message =
+    err instanceof Error
+      ? err.message
+      : "Erro interno inesperado no servidor.";
+
+  const status = message.startsWith("CORS bloqueado:") ? 403 : 500;
+
+  return res.status(status).json({
     ok: false,
-    error:
-      err instanceof Error
-        ? err.message
-        : "Erro interno inesperado no servidor.",
+    error: message,
   });
 });
 
@@ -186,4 +219,10 @@ app.listen(PORT, () => {
   console.log("Exportação de férias: POST /api/ferias/exportar");
   console.log("Administração: GET /api/admin/users");
   console.log("Logs de auditoria: GET /api/admin/logs");
+  console.log(
+    `CORS_ORIGINS carregadas: ${
+      corsOrigins.length ? corsOrigins.join(", ") : "(vazio - modo aberto)"
+    }`
+  );
+  console.log("Preview Vercel habilitado para hostnames com rh-ciapi-frontend");
 });
