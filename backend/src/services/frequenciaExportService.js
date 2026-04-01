@@ -24,6 +24,9 @@ const supabase = createClient(
 );
 
 const SMALL_BATCH_SINGLE_FILE_LIMIT = 1;
+const DAY_ROW_START_INDEX = 8;
+const DAY_ROW_END_INDEX = 38;
+const TEMPLATE_DAY_ROW_COUNT = 31;
 
 function onlyDigits(value) {
   return String(value || '').replace(/\D/g, '');
@@ -31,9 +34,8 @@ function onlyDigits(value) {
 
 function safeText(value) {
   if (value === null || value === undefined) return '';
-  const text = String(value).trim();
-  if (!text) return '';
-  if (text === 'undefined' || text === 'null') return '';
+  const text = String(value || '').trim();
+  if (!text || text === 'undefined' || text === 'null') return '';
   return text;
 }
 
@@ -87,7 +89,7 @@ function normalizeScope(scope) {
 }
 
 function getFriendlyFileName(servidor, ano, mes, ext) {
-  const nome = slugify(servidor?.nome || 'servidor');
+  const nome = slugify(servidor?.nome || servidor?.nome_completo || 'servidor');
   const yyyy = String(ano).padStart(4, '0');
   const mm = String(mes).padStart(2, '0');
   return `frequencia_${nome}_${yyyy}_${mm}.${ext}`;
@@ -149,13 +151,8 @@ async function resolveTemplatePath() {
 function deepSanitize(value) {
   if (value === null || value === undefined) return '';
 
-  if (typeof value === 'string') {
-    return safeText(value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map(deepSanitize);
-  }
+  if (typeof value === 'string') return safeText(value);
+  if (Array.isArray(value)) return value.map(deepSanitize);
 
   if (typeof value === 'object') {
     const output = {};
@@ -185,6 +182,58 @@ function forceHourFieldsBlank(templateData = {}) {
   return out;
 }
 
+function trimFrequencyRowsInDocumentXml(documentXml, totalDiasMes) {
+  if (!totalDiasMes || totalDiasMes >= TEMPLATE_DAY_ROW_COUNT) {
+    return documentXml;
+  }
+
+  const tableMatch = documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/);
+  if (!tableMatch) return documentXml;
+
+  const tableXml = tableMatch[0];
+  const firstRowStart = tableXml.indexOf('<w:tr');
+  const lastRowEnd = tableXml.lastIndexOf('</w:tr>');
+  if (firstRowStart === -1 || lastRowEnd === -1) return documentXml;
+
+  const rowsRegionEnd = lastRowEnd + '</w:tr>'.length;
+  const prefix = tableXml.slice(0, firstRowStart);
+  const rowsRegion = tableXml.slice(firstRowStart, rowsRegionEnd);
+  const suffix = tableXml.slice(rowsRegionEnd);
+  const rows = rowsRegion.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) || [];
+
+  if (rows.length < DAY_ROW_END_INDEX + 1) {
+    return documentXml;
+  }
+
+  const keepUntil = DAY_ROW_START_INDEX + totalDiasMes;
+  const trimmedRows = rows.filter((_, index) => index < keepUntil);
+  const rebuiltTableXml = `${prefix}${trimmedRows.join('')}${suffix}`;
+
+  return documentXml.replace(tableXml, rebuiltTableXml);
+}
+
+function postProcessRenderedDocx(docxBuffer, templateData = {}) {
+  const totalDiasMes = Number(templateData?.TOTAL_DIAS_MES || 31);
+  if (totalDiasMes >= TEMPLATE_DAY_ROW_COUNT) return docxBuffer;
+
+  const zip = new PizZip(docxBuffer);
+  const documentXmlFile = zip.file('word/document.xml');
+  const documentXml = documentXmlFile ? documentXmlFile.asText() : '';
+  if (!documentXml) return docxBuffer;
+
+  const nextDocumentXml = trimFrequencyRowsInDocumentXml(documentXml, totalDiasMes);
+
+  if (nextDocumentXml !== documentXml) {
+    zip.file('word/document.xml', nextDocumentXml);
+    return zip.generate({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+    });
+  }
+
+  return docxBuffer;
+}
+
 function buildDocxBufferFromTemplate(templateBinary, templateData) {
   try {
     const zip = new PizZip(templateBinary);
@@ -207,10 +256,12 @@ function buildDocxBufferFromTemplate(templateBinary, templateData) {
 
     doc.render(finalData);
 
-    return doc.getZip().generate({
+    const rawBuffer = doc.getZip().generate({
       type: 'nodebuffer',
       compression: 'DEFLATE',
     });
+
+    return postProcessRenderedDocx(rawBuffer, finalData);
   } catch (error) {
     const explanation =
       error?.properties?.errors
