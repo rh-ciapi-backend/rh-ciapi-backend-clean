@@ -13,22 +13,57 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-const corsOrigins = (process.env.CORS_ORIGINS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+function normalizeAllowedOrigins() {
+  const configured = String(process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const defaults = [
+    "https://www.rhciapi.com.br",
+    "https://rhciapi.com.br",
+    "https://api.rhciapi.com.br",
+  ];
+
+  return Array.from(new Set([...defaults, ...configured]));
+}
+
+const allowedOrigins = normalizeAllowedOrigins();
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+
+  try {
+    const url = new URL(origin);
+    const hostname = url.hostname.toLowerCase();
+
+    if (hostname === "localhost" || hostname === "127.0.0.1") return true;
+
+    if (
+      hostname.endsWith(".vercel.app") &&
+      (hostname.includes("rh-ciapi") || hostname.includes("rhciapi"))
+    ) {
+      return true;
+    }
+
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
 
 app.use(
   cors({
     origin(origin, cb) {
-      if (!origin) return cb(null, true);
-      if (corsOrigins.length === 0) return cb(null, true);
-      if (corsOrigins.includes(origin)) return cb(null, true);
+      if (isAllowedOrigin(origin)) return cb(null, true);
       return cb(new Error(`CORS bloqueado: ${origin}`));
     },
     credentials: true,
   })
 );
+
+app.options("*", cors());
 
 const PORT = process.env.PORT || 5000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -95,6 +130,9 @@ app.get("/health", (_req, res) => {
     service: "rh-ciapi-backend",
     time: new Date().toISOString(),
     exportDir,
+    cors: {
+      allowedOrigins,
+    },
     routes: {
       feriasExport: Boolean(feriasExportRoutes),
       frequencia: Boolean(frequenciaRoutes),
