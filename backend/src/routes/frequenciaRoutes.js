@@ -12,19 +12,19 @@ router.get("/", async (req, res) => {
   try {
     const ano = Number(req.query.ano);
     const mes = Number(req.query.mes);
-    const servidorCpf = req.query.servidorCpf || req.query.cpf || null;
 
-    const data = await listarFrequenciaMensal({
+    const result = await listarFrequenciaMensal({
       supabase: req.app.locals.supabase,
       ano,
       mes,
-      servidorCpf,
+      servidorCpf: req.query.servidorCpf || req.query.cpf || null,
+      cpf: req.query.cpf || req.query.servidorCpf || null,
+      categoria: req.query.categoria || null,
+      setor: req.query.setor || null,
+      status: req.query.status || null,
     });
 
-    return res.status(200).json({
-      ok: true,
-      data,
-    });
+    return res.status(200).json(result);
   } catch (error) {
     console.error("[FREQUENCIA][GET /] erro:", error);
     return res.status(500).json({
@@ -41,10 +41,7 @@ router.post("/", async (req, res) => {
       payload: req.body || {},
     });
 
-    return res.status(200).json({
-      ok: true,
-      data: result,
-    });
+    return res.status(200).json(result);
   } catch (error) {
     console.error("[FREQUENCIA][POST /] erro:", error);
     return res.status(500).json({
@@ -62,10 +59,7 @@ router.put("/:id", async (req, res) => {
       payload: req.body || {},
     });
 
-    return res.status(200).json({
-      ok: true,
-      data: result,
-    });
+    return res.status(200).json(result);
   } catch (error) {
     console.error("[FREQUENCIA][PUT /:id] erro:", error);
     return res.status(500).json({
@@ -82,10 +76,7 @@ router.delete("/:id", async (req, res) => {
       id: req.params.id,
     });
 
-    return res.status(200).json({
-      ok: true,
-      data: result,
-    });
+    return res.status(200).json(result);
   } catch (error) {
     console.error("[FREQUENCIA][DELETE /:id] erro:", error);
     return res.status(500).json({
