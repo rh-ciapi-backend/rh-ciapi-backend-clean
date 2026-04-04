@@ -1,27 +1,31 @@
-const { createClient } = require('@supabase/supabase-js');
-const { consolidateMonthByServidor } = require('../utils/frequenciaDayMap');
-const { buildFrequenciaTemplateData } = require('../utils/frequenciaTemplateBuilder');
-const { normalizeDateInput, safeArray } = require('../utils/frequenciaRules');
+const { createClient } = require("@supabase/supabase-js");
+const { consolidateMonthByServidor } = require("../utils/frequenciaDayMap");
+const { buildFrequenciaTemplateData } = require("../utils/frequenciaTemplateBuilder");
+const { normalizeDateInput, safeArray } = require("../utils/frequenciaRules");
 
-const supabase = createClient(
+const fallbackSupabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
+function getSupabase(clientFromParams) {
+  return clientFromParams || fallbackSupabase;
+}
+
 function getMonthRange(year, month) {
-  const start = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-01`;
+  const start = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-01`;
   const endDate = new Date(year, month, 0);
-  const end = `${year}-${String(month).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}`;
+  const end = `${year}-${String(month).padStart(2, "0")}-${String(endDate.getDate()).padStart(2, "0")}`;
   return { start, end };
 }
 
 function onlyDigits(value) {
-  return String(value || '').replace(/\D/g, '');
+  return String(value || "").replace(/\D/g, "");
 }
 
-function pick(obj, keys, fallback = '') {
+function pick(obj, keys, fallback = "") {
   for (const key of keys) {
-    if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== '') {
+    if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
       return obj[key];
     }
   }
@@ -30,49 +34,49 @@ function pick(obj, keys, fallback = '') {
 
 function normalizeServidor(row) {
   const cpf = onlyDigits(
-    pick(row, ['cpf', 'servidor_cpf', 'cpf_servidor', 'documento'])
+    pick(row, ["cpf", "servidor_cpf", "cpf_servidor", "documento"])
   );
 
   const id =
-    pick(row, ['servidor', 'id', 'uuid', 'servidor_id', 'employee_id'], null) ||
+    pick(row, ["servidor", "id", "uuid", "servidor_id", "employee_id"], null) ||
     cpf ||
-    pick(row, ['matricula'], '');
+    pick(row, ["matricula"], "");
 
   const nome = pick(
     row,
-    ['nome_completo', 'nome', 'servidor_nome', 'full_name', 'name'],
-    'Servidor sem nome'
+    ["nome_completo", "nome", "servidor_nome", "full_name", "name"],
+    "Servidor sem nome"
   );
 
   return {
     id,
     nome,
     cpf,
-    matricula: pick(row, ['matricula', 'registro', 'mat']),
-    categoria: pick(row, ['categoria_canonic', 'categoria_canonica', 'categoria']),
-    cargo: pick(row, ['cargo', 'funcao', 'role']),
-    setor: pick(row, ['setor', 'lotacao', 'departamento']),
-    unidade: pick(row, ['unidade', 'orgao', 'secretaria', 'setor']),
-    lotacao: pick(row, ['lotacao', 'setor', 'departamento']),
-    status: pick(row, ['status', 'situacao'], ''),
-    chDiaria: pick(row, ['ch_diaria', 'chDiaria', 'carga_horaria_diaria']),
-    chSemanal: pick(row, ['ch_semanal', 'chSemanal', 'carga_horaria_semanal']),
+    matricula: pick(row, ["matricula", "registro", "mat"]),
+    categoria: pick(row, ["categoria_canonic", "categoria_canonica", "categoria"]),
+    cargo: pick(row, ["cargo", "funcao", "role"]),
+    setor: pick(row, ["setor", "lotacao", "departamento"]),
+    unidade: pick(row, ["unidade", "orgao", "secretaria", "setor"]),
+    lotacao: pick(row, ["lotacao", "setor", "departamento"]),
+    status: pick(row, ["status", "situacao"], ""),
+    chDiaria: pick(row, ["ch_diaria", "chDiaria", "carga_horaria_diaria"]),
+    chSemanal: pick(row, ["ch_semanal", "chSemanal", "carga_horaria_semanal"]),
     raw: row,
   };
 }
 
-function normalizeOcorrencia(row, forcedTipo = '') {
+function normalizeOcorrencia(row, forcedTipo = "") {
   return {
-    id: pick(row, ['id', 'uuid']),
+    id: pick(row, ["id", "uuid"]),
     data:
-      normalizeDateInput(pick(row, ['data', 'data_ocorrencia', 'date', 'dia'])) ||
-      normalizeDateInput(pick(row, ['inicio', 'data_inicio'])) ||
+      normalizeDateInput(pick(row, ["data", "data_ocorrencia", "date", "dia"])) ||
+      normalizeDateInput(pick(row, ["inicio", "data_inicio"])) ||
       null,
-    tipo: forcedTipo || pick(row, ['tipo', 'type', 'ocorrencia_tipo', 'kind', 'status']),
-    turno: pick(row, ['turno', 'periodo', 'shift', 'turn'], 'AMBOS'),
-    servidor_cpf: onlyDigits(pick(row, ['servidor_cpf', 'cpf', 'cpf_servidor'])),
-    servidor_id: pick(row, ['servidor', 'servidor_id', 'employee_id', 'id_servidor']),
-    observacao: pick(row, ['observacao', 'descricao', 'motivo', 'obs']),
+    tipo: forcedTipo || pick(row, ["tipo", "type", "ocorrencia_tipo", "kind", "status"]),
+    turno: pick(row, ["turno", "periodo", "shift", "turn"], "AMBOS"),
+    servidor_cpf: onlyDigits(pick(row, ["servidor_cpf", "cpf", "cpf_servidor"])),
+    servidor_id: pick(row, ["servidor", "servidor_id", "employee_id", "id_servidor"]),
+    observacao: pick(row, ["observacao", "descricao", "motivo", "obs"]),
     raw: row,
   };
 }
@@ -80,7 +84,7 @@ function normalizeOcorrencia(row, forcedTipo = '') {
 function normalizeFeriasRow(row) {
   return {
     ...row,
-    servidor_cpf: onlyDigits(pick(row, ['servidor_cpf', 'cpf', 'cpf_servidor'])),
+    servidor_cpf: onlyDigits(pick(row, ["servidor_cpf", "cpf", "cpf_servidor"])),
     periodo1_inicio: normalizeDateInput(row.periodo1_inicio),
     periodo1_fim: normalizeDateInput(row.periodo1_fim),
     periodo2_inicio: normalizeDateInput(row.periodo2_inicio),
@@ -96,55 +100,63 @@ function normalizeEventoRow(row) {
   return {
     ...row,
     data:
-      normalizeDateInput(pick(row, ['data', 'date', 'data_evento', 'dia'])) || null,
-    tipo: pick(row, ['tipo', 'type', 'categoria', 'kind']),
-    titulo: pick(row, ['titulo', 'title', 'nome', 'descricao']),
+      normalizeDateInput(pick(row, ["data", "date", "data_evento", "dia"])) || null,
+    tipo: pick(row, ["tipo", "type", "categoria", "kind"]),
+    titulo: pick(row, ["titulo", "title", "nome", "descricao"]),
   };
 }
 
-async function fetchServidores({ cpf, setor, categoria, status }) {
-  let query = supabase.from('servidores').select('*');
+async function fetchServidores({
+  supabase,
+  cpf,
+  servidorCpf,
+  setor,
+  categoria,
+  status,
+}) {
+  const db = getSupabase(supabase);
+  const cpfFiltro = onlyDigits(cpf || servidorCpf);
 
-  if (cpf) {
-    query = query.eq('cpf', onlyDigits(cpf));
+  let query = db.from("servidores").select("*");
+
+  if (cpfFiltro) {
+    query = query.eq("cpf", cpfFiltro);
   }
 
   if (setor) {
-    query = query.ilike('setor', `%${setor}%`);
+    query = query.ilike("setor", `%${setor}%`);
   }
 
   if (categoria) {
-    query = query.ilike('categoria', `%${categoria}%`);
+    query = query.ilike("categoria", `%${categoria}%`);
   }
 
-  // aplica filtro de status somente se vier preenchido de verdade
   if (status && String(status).trim()) {
-    query = query.ilike('status', String(status).trim());
+    query = query.ilike("status", String(status).trim());
   }
 
-  let { data, error } = await query.order('nome', { ascending: true });
+  let { data, error } = await query.order("nome", { ascending: true });
 
-  // fallback para bancos cujo campo seja nome_completo em vez de nome
   if (error) {
-    const fallbackQuery = supabase.from('servidores').select('*');
+    let fallbackQuery = db.from("servidores").select("*");
 
-    if (cpf) {
-      fallbackQuery.eq('cpf', onlyDigits(cpf));
+    if (cpfFiltro) {
+      fallbackQuery = fallbackQuery.eq("cpf", cpfFiltro);
     }
 
     if (setor) {
-      fallbackQuery.ilike('setor', `%${setor}%`);
+      fallbackQuery = fallbackQuery.ilike("setor", `%${setor}%`);
     }
 
     if (categoria) {
-      fallbackQuery.ilike('categoria', `%${categoria}%`);
+      fallbackQuery = fallbackQuery.ilike("categoria", `%${categoria}%`);
     }
 
     if (status && String(status).trim()) {
-      fallbackQuery.ilike('status', String(status).trim());
+      fallbackQuery = fallbackQuery.ilike("status", String(status).trim());
     }
 
-    const fallback = await fallbackQuery.order('nome_completo', { ascending: true });
+    const fallback = await fallbackQuery.order("nome_completo", { ascending: true });
     data = fallback.data;
     error = fallback.error;
   }
@@ -156,16 +168,17 @@ async function fetchServidores({ cpf, setor, categoria, status }) {
   return safeArray(data).map(normalizeServidor);
 }
 
-async function fetchFerias({ year, month, servidores }) {
+async function fetchFerias({ supabase, year, month, servidores }) {
+  const db = getSupabase(supabase);
   const { start, end } = getMonthRange(year, month);
   const cpfs = servidores.map((s) => s.cpf).filter(Boolean);
 
   if (!cpfs.length) return [];
 
-  const { data, error } = await supabase
-    .from('ferias')
-    .select('*')
-    .in('servidor_cpf', cpfs);
+  const { data, error } = await db
+    .from("ferias")
+    .select("*")
+    .in("servidor_cpf", cpfs);
 
   if (error) {
     throw new Error(`Erro ao buscar férias: ${error.message}`);
@@ -185,15 +198,16 @@ async function fetchFerias({ year, month, servidores }) {
     });
 }
 
-async function fetchEventos({ year, month }) {
+async function fetchEventos({ supabase, year, month }) {
+  const db = getSupabase(supabase);
   const { start, end } = getMonthRange(year, month);
 
-  const { data, error } = await supabase
-    .from('eventos')
-    .select('*')
-    .gte('data', start)
-    .lte('data', end)
-    .order('data', { ascending: true });
+  const { data, error } = await db
+    .from("eventos")
+    .select("*")
+    .gte("data", start)
+    .lte("data", end)
+    .order("data", { ascending: true });
 
   if (error) {
     throw new Error(`Erro ao buscar eventos: ${error.message}`);
@@ -202,20 +216,26 @@ async function fetchEventos({ year, month }) {
   return safeArray(data).map(normalizeEventoRow);
 }
 
-async function fetchOcorrenciasFromFrequenciaOcorrencias({ year, month, servidores }) {
+async function fetchOcorrenciasFromFrequenciaOcorrencias({
+  supabase,
+  year,
+  month,
+  servidores,
+}) {
+  const db = getSupabase(supabase);
   const { start, end } = getMonthRange(year, month);
   const cpfs = servidores.map((s) => s.cpf).filter(Boolean);
 
   if (!cpfs.length) return [];
 
-  const dateFields = ['data', 'data_ocorrencia'];
-  const cpfFields = ['servidor_cpf', 'cpf'];
+  const dateFields = ["data", "data_ocorrencia"];
+  const cpfFields = ["servidor_cpf", "cpf"];
 
   for (const cpfField of cpfFields) {
     for (const dateField of dateFields) {
-      const { data, error } = await supabase
-        .from('frequencia_ocorrencias')
-        .select('*')
+      const { data, error } = await db
+        .from("frequencia_ocorrencias")
+        .select("*")
         .in(cpfField, cpfs)
         .gte(dateField, start)
         .lte(dateField, end);
@@ -229,20 +249,21 @@ async function fetchOcorrenciasFromFrequenciaOcorrencias({ year, month, servidor
   return [];
 }
 
-async function fetchFaltasFallback({ year, month, servidores }) {
+async function fetchFaltasFallback({ supabase, year, month, servidores }) {
+  const db = getSupabase(supabase);
   const { start, end } = getMonthRange(year, month);
   const cpfs = servidores.map((s) => s.cpf).filter(Boolean);
 
   if (!cpfs.length) return [];
 
-  const cpfFields = ['servidor_cpf', 'cpf'];
-  const dateFields = ['data', 'data_ocorrencia', 'dia'];
+  const cpfFields = ["servidor_cpf", "cpf"];
+  const dateFields = ["data", "data_ocorrencia", "dia"];
 
   for (const cpfField of cpfFields) {
     for (const dateField of dateFields) {
-      const { data, error } = await supabase
-        .from('faltas')
-        .select('*')
+      const { data, error } = await db
+        .from("faltas")
+        .select("*")
         .in(cpfField, cpfs)
         .gte(dateField, start)
         .lte(dateField, end);
@@ -256,7 +277,8 @@ async function fetchFaltasFallback({ year, month, servidores }) {
   return [];
 }
 
-async function fetchAtestadosFallback({ year, month, servidores }) {
+async function fetchAtestadosFallback({ supabase, year, month, servidores }) {
+  const db = getSupabase(supabase);
   const { start, end } = getMonthRange(year, month);
   const cpfs = servidores.map((s) => s.cpf).filter(Boolean);
 
@@ -264,10 +286,10 @@ async function fetchAtestadosFallback({ year, month, servidores }) {
 
   const rows = [];
 
-  for (const field of ['servidor_cpf', 'cpf']) {
-    const { data, error } = await supabase
-      .from('atestados')
-      .select('*')
+  for (const field of ["servidor_cpf", "cpf"]) {
+    const { data, error } = await db
+      .from("atestados")
+      .select("*")
       .in(field, cpfs);
 
     if (error) {
@@ -293,8 +315,8 @@ async function fetchAtestadosFallback({ year, month, servidores }) {
 
       while (cursor <= endDate) {
         const y = cursor.getFullYear();
-        const m = String(cursor.getMonth() + 1).padStart(2, '0');
-        const d = String(cursor.getDate()).padStart(2, '0');
+        const m = String(cursor.getMonth() + 1).padStart(2, "0");
+        const d = String(cursor.getDate()).padStart(2, "0");
         const dataIso = `${y}-${m}-${d}`;
 
         rows.push(
@@ -302,10 +324,10 @@ async function fetchAtestadosFallback({ year, month, servidores }) {
             {
               ...row,
               data: dataIso,
-              tipo: 'ATESTADO',
-              turno: row.turno || row.periodo || 'AMBOS',
+              tipo: "ATESTADO",
+              turno: row.turno || row.periodo || "AMBOS",
             },
-            'ATESTADO'
+            "ATESTADO"
           )
         );
 
@@ -330,7 +352,7 @@ function groupByServidor(servidores, rows) {
 
   for (const row of safeArray(rows)) {
     const cpf = onlyDigits(row.servidor_cpf || row.cpf);
-    const id = row.servidor_id ? String(row.servidor_id) : '';
+    const id = row.servidor_id ? String(row.servidor_id) : "";
 
     if (cpf && byCpf.has(cpf)) {
       byCpf.get(cpf).push(row);
@@ -350,11 +372,13 @@ async function listarFrequenciaMensal(params = {}) {
   const month = Number(params.mes || params.month);
 
   if (!year || !month) {
-    throw new Error('Parâmetros ano e mes são obrigatórios');
+    throw new Error("Parâmetros ano e mes são obrigatórios");
   }
 
   const servidores = await fetchServidores({
+    supabase: params.supabase,
     cpf: params.cpf,
+    servidorCpf: params.servidorCpf,
     setor: params.setor,
     categoria: params.categoria,
     status: params.status || undefined,
@@ -374,11 +398,26 @@ async function listarFrequenciaMensal(params = {}) {
 
   const [ferias, eventos, ocorrenciasMain, faltasFallback, atestadosFallback] =
     await Promise.all([
-      fetchFerias({ year, month, servidores }),
-      fetchEventos({ year, month }),
-      fetchOcorrenciasFromFrequenciaOcorrencias({ year, month, servidores }).catch(() => []),
-      fetchFaltasFallback({ year, month, servidores }).catch(() => []),
-      fetchAtestadosFallback({ year, month, servidores }).catch(() => []),
+      fetchFerias({ supabase: params.supabase, year, month, servidores }),
+      fetchEventos({ supabase: params.supabase, year, month }),
+      fetchOcorrenciasFromFrequenciaOcorrencias({
+        supabase: params.supabase,
+        year,
+        month,
+        servidores,
+      }).catch(() => []),
+      fetchFaltasFallback({
+        supabase: params.supabase,
+        year,
+        month,
+        servidores,
+      }).catch(() => []),
+      fetchAtestadosFallback({
+        supabase: params.supabase,
+        year,
+        month,
+        servidores,
+      }).catch(() => []),
     ]);
 
   const ocorrencias = [
@@ -445,17 +484,19 @@ async function listarFrequenciaMensal(params = {}) {
   };
 }
 
-async function criarOcorrencia(payload = {}) {
+async function registrarOcorrenciaFrequencia({ supabase, payload = {} }) {
+  const db = getSupabase(supabase);
+
   const insertPayload = {
     servidor_cpf: onlyDigits(payload.servidor_cpf || payload.cpf),
     data: normalizeDateInput(payload.data),
     tipo: payload.tipo,
-    turno: payload.turno || 'AMBOS',
-    observacao: payload.observacao || '',
+    turno: payload.turno || "AMBOS",
+    observacao: payload.observacao || "",
   };
 
-  const { data, error } = await supabase
-    .from('frequencia_ocorrencias')
+  const { data, error } = await db
+    .from("frequencia_ocorrencias")
     .insert(insertPayload)
     .select()
     .single();
@@ -470,7 +511,8 @@ async function criarOcorrencia(payload = {}) {
   };
 }
 
-async function editarOcorrencia(id, payload = {}) {
+async function editarOcorrenciaFrequencia({ supabase, id, payload = {} }) {
+  const db = getSupabase(supabase);
   const updatePayload = {};
 
   if (payload.data) updatePayload.data = normalizeDateInput(payload.data);
@@ -478,10 +520,10 @@ async function editarOcorrencia(id, payload = {}) {
   if (payload.turno !== undefined) updatePayload.turno = payload.turno;
   if (payload.observacao !== undefined) updatePayload.observacao = payload.observacao;
 
-  const { data, error } = await supabase
-    .from('frequencia_ocorrencias')
+  const { data, error } = await db
+    .from("frequencia_ocorrencias")
     .update(updatePayload)
-    .eq('id', id)
+    .eq("id", id)
     .select()
     .single();
 
@@ -495,11 +537,13 @@ async function editarOcorrencia(id, payload = {}) {
   };
 }
 
-async function excluirOcorrencia(id) {
-  const { error } = await supabase
-    .from('frequencia_ocorrencias')
+async function excluirOcorrenciaFrequencia({ supabase, id }) {
+  const db = getSupabase(supabase);
+
+  const { error } = await db
+    .from("frequencia_ocorrencias")
     .delete()
-    .eq('id', id);
+    .eq("id", id);
 
   if (error) {
     throw new Error(`Erro ao excluir ocorrência: ${error.message}`);
@@ -512,7 +556,7 @@ async function excluirOcorrencia(id) {
 
 module.exports = {
   listarFrequenciaMensal,
-  criarOcorrencia,
-  editarOcorrencia,
-  excluirOcorrencia,
+  registrarOcorrenciaFrequencia,
+  editarOcorrenciaFrequencia,
+  excluirOcorrenciaFrequencia,
 };
