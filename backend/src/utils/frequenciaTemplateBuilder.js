@@ -113,7 +113,7 @@ function resolveRubrica(dayItem = {}) {
 }
 
 function resolveHorasPlaceholder(rubrica) {
-  return rubrica ? '————' : '';
+  return rubrica ? '——' : '';
 }
 
 function resolveOcorrenciaPorTurno(turno = {}) {
