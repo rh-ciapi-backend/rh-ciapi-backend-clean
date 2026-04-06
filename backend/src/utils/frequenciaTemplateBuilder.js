@@ -39,17 +39,77 @@ function monthLabel(month) {
   return months[Number(month)] || String(month || '');
 }
 
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const text = safeText(value);
+    if (text) return text;
+  }
+  return '';
+}
+
+function normalizeCargaHoraria(value) {
+  const text = safeText(value);
+  if (!text) return '';
+
+  if (/^\d+([.,]\d+)?$/.test(text)) {
+    const normalized = text.replace(',', '.');
+    return `${normalized}h`;
+  }
+
+  return text;
+}
+
+function abbreviateFacultativo(value) {
+  const text = safeText(value);
+  if (!text) return '';
+
+  return text
+    .replace(/PONTO\s+FACULTATIVO/gi, 'P. FACULT.')
+    .replace(/PONTO\s+FAC\./gi, 'P. FACULT.')
+    .replace(/P\.\s*FACULTATIVO/gi, 'P. FACULT.')
+    .replace(/FACULTATIVO/gi, 'FACULT.');
+}
+
 function normalizeServidorHeader(servidor = {}) {
+  const chDiaria = normalizeCargaHoraria(
+    firstNonEmpty(
+      servidor.chDiaria,
+      servidor.ch_diaria,
+      servidor['ch_diária'],
+      servidor.CH_DIARIA,
+      servidor.CH_DIÁRIA,
+      servidor.c_h_diaria,
+      servidor.carga_horaria_diaria,
+      servidor.cargaHorariaDiaria,
+      servidor.carga_horaria_dia,
+      servidor.cargaHorariaDia,
+      servidor.carga_diaria
+    )
+  );
+
+  const chSemanal = normalizeCargaHoraria(
+    firstNonEmpty(
+      servidor.chSemanal,
+      servidor.ch_semanal,
+      servidor['ch_semanal'],
+      servidor.CH_SEMANAL,
+      servidor.c_h_semanal,
+      servidor.carga_horaria_semanal,
+      servidor.cargaHorariaSemanal,
+      servidor.carga_semanal
+    )
+  );
+
   return {
-    NOME: safeText(servidor.nome || servidor.nome_completo),
-    MATRICULA: safeText(servidor.matricula),
-    CPF: safeText(onlyDigits(servidor.cpf)),
-    CARGO: safeText(servidor.cargo || servidor.funcao),
-    CATEGORIA: safeText(servidor.categoria),
-    CH_DIARIA: safeText(servidor.chDiaria || servidor.ch_diaria),
-    CH_SEMANAL: safeText(servidor.chSemanal || servidor.ch_semanal),
-    UNIDADE: safeText(servidor.unidade || servidor.setor || ''),
-    LOTACAO: safeText(servidor.lotacao || servidor.setor || ''),
+    NOME: firstNonEmpty(servidor.nome, servidor.nome_completo, servidor.nomeCompleto),
+    MATRICULA: firstNonEmpty(servidor.matricula, servidor.registro, servidor.mat),
+    CPF: safeText(onlyDigits(firstNonEmpty(servidor.cpf, servidor.documento))),
+    CARGO: firstNonEmpty(servidor.cargo, servidor.funcao, servidor.função),
+    CATEGORIA: firstNonEmpty(servidor.categoria, servidor.categoria_canonica, servidor.categoriaCanonica),
+    CH_DIARIA: chDiaria,
+    CH_SEMANAL: chSemanal,
+    UNIDADE: firstNonEmpty(servidor.unidade, servidor.orgao, servidor.órgão, servidor.setor),
+    LOTACAO: firstNonEmpty(servidor.lotacao, servidor.lotação, servidor.setor),
   };
 }
 
@@ -64,17 +124,6 @@ function getDayItemMap(dayItems = []) {
   }
 
   return map;
-}
-
-function abbreviateFacultativo(value) {
-  const text = safeText(value);
-  if (!text) return '';
-
-  return text
-    .replace(/PONTO\s+FACULTATIVO/gi, 'P. FACULT.')
-    .replace(/PONTO\s+FAC\./gi, 'P. FACULT.')
-    .replace(/P\.\s*FACULTATIVO/gi, 'P. FACULT.')
-    .replace(/FACULTATIVO/gi, 'FACULT.');
 }
 
 function extractTextsFromDayItem(dayItem = {}) {
