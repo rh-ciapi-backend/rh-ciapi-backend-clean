@@ -106,6 +106,15 @@ function normalizeEventoRow(row) {
 function getErrorMessage(error) {
   if (!error) return "";
   if (error instanceof Error) return error.message || "";
+  if (typeof error === "object") {
+    return String(
+      error.message ||
+        error.details ||
+        error.hint ||
+        error.error_description ||
+        JSON.stringify(error)
+    );
+  }
   return String(error || "");
 }
 
@@ -140,6 +149,27 @@ async function detectEventosTable(supabase) {
   );
 }
 
+async function runListQuery({ supabase, table, ano, mes, tipo, ativo, useAtivoFilter }) {
+  let query = supabase.from(table).select("*").order("data", { ascending: true });
+
+  if (Number.isFinite(ano) && Number.isFinite(mes) && mes >= 1 && mes <= 12) {
+    const start = `${String(ano).padStart(4, "0")}-${pad2(mes)}-01`;
+    const endDate = new Date(ano, mes, 0);
+    const end = `${String(ano).padStart(4, "0")}-${pad2(mes)}-${pad2(endDate.getDate())}`;
+    query = query.gte("data", start).lte("data", end);
+  }
+
+  if (tipo) {
+    query = query.eq("tipo", normalizeTipo(tipo));
+  }
+
+  if (useAtivoFilter && typeof ativo === "boolean") {
+    query = query.eq("ativo", ativo);
+  }
+
+  return query;
+}
+
 async function listarEventos(supabase, filters = {}) {
   ensureSupabase(supabase);
   const table = await detectEventosTable(supabase);
@@ -149,40 +179,37 @@ async function listarEventos(supabase, filters = {}) {
   const tipo = safeString(filters.tipo);
   const ativo = filters.ativo;
 
-  async function execute(useAtivoFilter) {
-    let query = supabase.from(table).select("*").order("data", { ascending: true });
-
-    if (Number.isFinite(ano) && Number.isFinite(mes) && mes >= 1 && mes <= 12) {
-      const start = `${String(ano).padStart(4, "0")}-${pad2(mes)}-01`;
-      const endDate = new Date(ano, mes, 0);
-      const end = `${String(ano).padStart(4, "0")}-${pad2(mes)}-${pad2(endDate.getDate())}`;
-      query = query.gte("data", start).lte("data", end);
-    } else if (
-      (filters.ano !== undefined && !Number.isFinite(ano)) ||
-      (filters.mes !== undefined && !Number.isFinite(mes))
-    ) {
-      throw new Error("Ano e mês inválidos para consulta.");
-    }
-
-    if (tipo) {
-      query = query.eq("tipo", normalizeTipo(tipo));
-    }
-
-    if (useAtivoFilter && typeof ativo === "boolean") {
-      query = query.eq("ativo", ativo);
-    }
-
-    return query;
+  if (
+    (filters.ano !== undefined && !Number.isFinite(ano)) ||
+    (filters.mes !== undefined && !Number.isFinite(mes))
+  ) {
+    throw new Error("Ano e mês inválidos para consulta.");
   }
 
-  let result = await execute(true);
+  let result = await runListQuery({
+    supabase,
+    table,
+    ano,
+    mes,
+    tipo,
+    ativo,
+    useAtivoFilter: true,
+  });
 
   if (result.error && isMissingColumnError(result.error, "ativo")) {
-    result = await execute(false);
+    result = await runListQuery({
+      supabase,
+      table,
+      ano,
+      mes,
+      tipo,
+      ativo,
+      useAtivoFilter: false,
+    });
   }
 
   if (result.error) {
-    throw new Error(`Falha ao listar eventos: ${result.error.message}`);
+    throw new Error(`Falha ao listar eventos: ${getErrorMessage(result.error)}`);
   }
 
   return (Array.isArray(result.data) ? result.data : [])
@@ -206,7 +233,7 @@ async function obterEventoPorId(supabase, id) {
     .maybeSingle();
 
   if (error) {
-    throw new Error(`Falha ao consultar evento: ${error.message}`);
+    throw new Error(`Falha ao consultar evento: ${getErrorMessage(error)}`);
   }
 
   if (!data) {
@@ -256,7 +283,7 @@ async function ensureNoDuplicate(supabase, table, payload, exceptId = null) {
     .eq("tipo", payload.tipo);
 
   if (error) {
-    throw new Error(`Falha ao validar duplicidade: ${error.message}`);
+    throw new Error(`Falha ao validar duplicidade: ${getErrorMessage(error)}`);
   }
 
   const rows = Array.isArray(data) ? data : [];
@@ -267,6 +294,19 @@ async function ensureNoDuplicate(supabase, table, payload, exceptId = null) {
   }
 }
 
+async function insertEvento(supabase, table, payload) {
+  return supabase.from(table).insert(payload).select("*").single();
+}
+
+async function updateEventoRow(supabase, table, id, payload) {
+  return supabase
+    .from(table)
+    .update(payload)
+    .eq("id", safeString(id))
+    .select("*")
+    .single();
+}
+
 async function criarEvento(supabase, input = {}) {
   ensureSupabase(supabase);
   const table = await detectEventosTable(supabase);
@@ -274,24 +314,21 @@ async function criarEvento(supabase, input = {}) {
 
   await ensureNoDuplicate(supabase, table, payload);
 
-  let result = await supabase
-    .from(table)
-    .insert(payload)
-    .select("*")
-    .single();
+  let result = await insertEvento(supabase, table, payload);
 
   if (result.error && isMissingColumnError(result.error, "ativo")) {
-    const { ativo, ...payloadWithoutAtivo } = payload;
+    const payloadWithoutAtivo = {
+      data: payload.data,
+      tipo: payload.tipo,
+      titulo: payload.titulo,
+      descricao: payload.descricao,
+    };
 
-    result = await supabase
-      .from(table)
-      .insert(payloadWithoutAtivo)
-      .select("*")
-      .single();
+    result = await insertEvento(supabase, table, payloadWithoutAtivo);
   }
 
   if (result.error) {
-    throw new Error(`Falha ao criar evento: ${result.error.message}`);
+    throw new Error(`Falha ao criar evento: ${getErrorMessage(result.error)}`);
   }
 
   return normalizeEventoRow(result.data);
@@ -305,26 +342,21 @@ async function atualizarEvento(supabase, id, input = {}) {
 
   await ensureNoDuplicate(supabase, table, payload, id);
 
-  let result = await supabase
-    .from(table)
-    .update(payload)
-    .eq("id", safeString(id))
-    .select("*")
-    .single();
+  let result = await updateEventoRow(supabase, table, id, payload);
 
   if (result.error && isMissingColumnError(result.error, "ativo")) {
-    const { ativo, ...payloadWithoutAtivo } = payload;
+    const payloadWithoutAtivo = {
+      data: payload.data,
+      tipo: payload.tipo,
+      titulo: payload.titulo,
+      descricao: payload.descricao,
+    };
 
-    result = await supabase
-      .from(table)
-      .update(payloadWithoutAtivo)
-      .eq("id", safeString(id))
-      .select("*")
-      .single();
+    result = await updateEventoRow(supabase, table, id, payloadWithoutAtivo);
   }
 
   if (result.error) {
-    throw new Error(`Falha ao atualizar evento: ${result.error.message}`);
+    throw new Error(`Falha ao atualizar evento: ${getErrorMessage(result.error)}`);
   }
 
   return normalizeEventoRow(result.data);
@@ -338,7 +370,7 @@ async function excluirEvento(supabase, id) {
   const { error } = await supabase.from(table).delete().eq("id", safeString(id));
 
   if (error) {
-    throw new Error(`Falha ao excluir evento: ${error.message}`);
+    throw new Error(`Falha ao excluir evento: ${getErrorMessage(error)}`);
   }
 
   return current;
