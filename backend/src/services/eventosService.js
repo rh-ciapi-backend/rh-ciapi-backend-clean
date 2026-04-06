@@ -103,6 +103,18 @@ function normalizeEventoRow(row) {
   };
 }
 
+function isMissingColumnError(error, columnName) {
+  const message =
+    error instanceof Error ? error.message : String(error || "");
+  const normalized = message.toLowerCase();
+
+  return (
+    normalized.includes(`column`) &&
+    normalized.includes(columnName.toLowerCase()) &&
+    normalized.includes("does not exist")
+  );
+}
+
 async function detectEventosTable(supabase) {
   ensureSupabase(supabase);
 
@@ -131,35 +143,45 @@ async function listarEventos(supabase, filters = {}) {
   const tipo = safeString(filters.tipo);
   const ativo = filters.ativo;
 
-  let query = supabase.from(table).select("*").order("data", { ascending: true });
+  async function runQuery(useAtivoFilter) {
+    let query = supabase.from(table).select("*").order("data", { ascending: true });
 
-  if (Number.isFinite(ano) && Number.isFinite(mes) && mes >= 1 && mes <= 12) {
-    const start = `${String(ano).padStart(4, "0")}-${pad2(mes)}-01`;
-    const endDate = new Date(ano, mes, 0);
-    const end = `${String(ano).padStart(4, "0")}-${pad2(mes)}-${pad2(endDate.getDate())}`;
-    query = query.gte("data", start).lte("data", end);
-  } else if (
-    (filters.ano !== undefined && !Number.isFinite(ano)) ||
-    (filters.mes !== undefined && !Number.isFinite(mes))
-  ) {
-    throw new Error("Ano e mês inválidos para consulta.");
+    if (Number.isFinite(ano) && Number.isFinite(mes) && mes >= 1 && mes <= 12) {
+      const start = `${String(ano).padStart(4, "0")}-${pad2(mes)}-01`;
+      const endDate = new Date(ano, mes, 0);
+      const end = `${String(ano).padStart(4, "0")}-${pad2(mes)}-${pad2(endDate.getDate())}`;
+      query = query.gte("data", start).lte("data", end);
+    } else if (
+      (filters.ano !== undefined && !Number.isFinite(ano)) ||
+      (filters.mes !== undefined && !Number.isFinite(mes))
+    ) {
+      throw new Error("Ano e mês inválidos para consulta.");
+    }
+
+    if (tipo) {
+      query = query.eq("tipo", normalizeTipo(tipo));
+    }
+
+    if (useAtivoFilter && typeof ativo === "boolean") {
+      query = query.eq("ativo", ativo);
+    }
+
+    return query;
   }
 
-  if (tipo) {
-    query = query.eq("tipo", normalizeTipo(tipo));
+  let result = await runQuery(true);
+
+  if (result.error && isMissingColumnError(result.error, "ativo")) {
+    result = await runQuery(false);
   }
 
-  if (typeof ativo === "boolean") {
-    query = query.eq("ativo", ativo);
+  if (result.error) {
+    throw new Error(`Falha ao listar eventos: ${result.error.message}`);
   }
 
-  const { data, error } = await query;
-
-  if (error) {
-    throw new Error(`Falha ao listar eventos: ${error.message}`);
-  }
-
-  return (Array.isArray(data) ? data : []).map(normalizeEventoRow).filter(Boolean);
+  return (Array.isArray(result.data) ? result.data : [])
+    .map(normalizeEventoRow)
+    .filter(Boolean);
 }
 
 async function obterEventoPorId(supabase, id) {
@@ -246,17 +268,27 @@ async function criarEvento(supabase, input = {}) {
 
   await ensureNoDuplicate(supabase, table, payload);
 
-  const { data, error } = await supabase
+  let result = await supabase
     .from(table)
     .insert(payload)
     .select("*")
     .single();
 
-  if (error) {
-    throw new Error(`Falha ao criar evento: ${error.message}`);
+  if (result.error && isMissingColumnError(result.error, "ativo")) {
+    const { ativo, ...payloadWithoutAtivo } = payload;
+
+    result = await supabase
+      .from(table)
+      .insert(payloadWithoutAtivo)
+      .select("*")
+      .single();
   }
 
-  return normalizeEventoRow(data);
+  if (result.error) {
+    throw new Error(`Falha ao criar evento: ${result.error.message}`);
+  }
+
+  return normalizeEventoRow(result.data);
 }
 
 async function atualizarEvento(supabase, id, input = {}) {
@@ -267,18 +299,29 @@ async function atualizarEvento(supabase, id, input = {}) {
 
   await ensureNoDuplicate(supabase, table, payload, id);
 
-  const { data, error } = await supabase
+  let result = await supabase
     .from(table)
     .update(payload)
     .eq("id", safeString(id))
     .select("*")
     .single();
 
-  if (error) {
-    throw new Error(`Falha ao atualizar evento: ${error.message}`);
+  if (result.error && isMissingColumnError(result.error, "ativo")) {
+    const { ativo, ...payloadWithoutAtivo } = payload;
+
+    result = await supabase
+      .from(table)
+      .update(payloadWithoutAtivo)
+      .eq("id", safeString(id))
+      .select("*")
+      .single();
   }
 
-  return normalizeEventoRow(data);
+  if (result.error) {
+    throw new Error(`Falha ao atualizar evento: ${result.error.message}`);
+  }
+
+  return normalizeEventoRow(result.data);
 }
 
 async function excluirEvento(supabase, id) {
