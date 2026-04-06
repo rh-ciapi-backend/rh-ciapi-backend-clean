@@ -66,6 +66,15 @@ function getDayItemMap(dayItems = []) {
   return map;
 }
 
+function abbreviateFacultativo(value) {
+  const text = safeText(value);
+  if (!text) return '';
+
+  return text
+    .replace(/PONTO\s+FACULTATIVO/gi, 'P. FACULTATIVO')
+    .replace(/PONTO\s+FAC\./gi, 'P. FACULTATIVO');
+}
+
 function extractTextsFromDayItem(dayItem = {}) {
   const values = [
     dayItem?.rubrica,
@@ -109,7 +118,7 @@ function resolveRubrica(dayItem = {}) {
   if (hasAny(texts, ['SABADO', 'SÁBADO'])) return 'SABADO';
   if (hasAny(texts, ['DOMINGO'])) return 'DOMINGO';
 
-  return safeText(
+  return abbreviateFacultativo(
     dayItem?.rubrica || dayItem?.turno1?.rubrica || dayItem?.turno2?.rubrica || ''
   );
 }
@@ -119,7 +128,7 @@ function resolveHorasPlaceholder(rubrica) {
 }
 
 function resolveOcorrenciaPorTurno(turno = {}) {
-  return safeText(turno?.ocorrencia);
+  return abbreviateFacultativo(turno?.ocorrencia);
 }
 
 function buildEmptyDayPlaceholders(day) {
@@ -199,7 +208,7 @@ function sanitizeTemplatePayload(payload = {}) {
     }
 
     if (typeof value === 'string') {
-      clean[key] = safeText(value);
+      clean[key] = abbreviateFacultativo(value);
       continue;
     }
 
