@@ -110,6 +110,92 @@ function createDocxtemplaterInstance(zip) {
   });
 }
 
+function reduceFontForSpecificTermsInXml(xml) {
+  if (!xml || typeof xml !== 'string') return xml;
+
+  const replacements = [
+    {
+      term: 'PONTO FACULTATIVO',
+      halfPoints: 14,
+      ascii: 'PONTO FACULTATIVO'
+    }
+  ];
+
+  let nextXml = xml;
+
+  replacements.forEach(({ term, halfPoints, ascii }) => {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const pattern = new RegExp(
+      `(<w:r[^>]*>[\\s\\S]*?<w:t[^>]*>)(${escaped})(<\\/w:t>[\\s\\S]*?<\\/w:r>)`,
+      'g'
+    );
+
+    nextXml = nextXml.replace(pattern, (match, openTag, textValue, closeTag) => {
+      if (/<w:rPr>[\s\S]*?<w:sz\b[^>]*w:val="14"[\s\S]*?<\/w:rPr>/.test(match)) {
+        return match;
+      }
+
+      if (/<w:rPr>/.test(match)) {
+        return match.replace(
+          /<w:rPr>([\s\S]*?)<\/w:rPr>/,
+          `<w:rPr>$1<w:sz w:val="${halfPoints}"/><w:szCs w:val="${halfPoints}"/></w:rPr>`
+        );
+      }
+
+      return `${openTag.replace(
+        /<w:t[^>]*>$/,
+        `<w:rPr><w:sz w:val="${halfPoints}"/><w:szCs w:val="${halfPoints}"/></w:rPr>$&`
+      )}${textValue}${closeTag}`;
+    });
+
+    if (ascii && ascii !== term) {
+      const asciiPattern = new RegExp(
+        `(<w:r[^>]*>[\\s\\S]*?<w:t[^>]*>)(${ascii.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(<\\/w:t>[\\s\\S]*?<\\/w:r>)`,
+        'g'
+      );
+
+      nextXml = nextXml.replace(asciiPattern, (match, openTag, textValue, closeTag) => {
+        if (/<w:rPr>[\s\S]*?<w:sz\b[^>]*w:val="14"[\s\S]*?<\/w:rPr>/.test(match)) {
+          return match;
+        }
+
+        if (/<w:rPr>/.test(match)) {
+          return match.replace(
+            /<w:rPr>([\s\S]*?)<\/w:rPr>/,
+            `<w:rPr>$1<w:sz w:val="${halfPoints}"/><w:szCs w:val="${halfPoints}"/></w:rPr>`
+          );
+        }
+
+        return `${openTag.replace(
+          /<w:t[^>]*>$/,
+          `<w:rPr><w:sz w:val="${halfPoints}"/><w:szCs w:val="${halfPoints}"/></w:rPr>$&`
+        )}${textValue}${closeTag}`;
+      });
+    }
+  });
+
+  return nextXml;
+}
+
+function applyRubricaCompactionToDocxBuffer(docxBuffer) {
+  const zip = new PizZip(docxBuffer);
+  const documentXmlPath = 'word/document.xml';
+  const docFile = zip.file(documentXmlPath);
+
+  if (!docFile) return docxBuffer;
+
+  const originalXml = docFile.asText();
+  const updatedXml = reduceFontForSpecificTermsInXml(originalXml);
+
+  if (updatedXml !== originalXml) {
+    zip.file(documentXmlPath, updatedXml);
+    return zip.generate({ type: 'nodebuffer' });
+  }
+
+  return docxBuffer;
+}
+
 function renderDocxTemplate(docxBuffer, templateData) {
   const zip = new PizZip(docxBuffer);
   const doc = createDocxtemplaterInstance(zip);
@@ -123,10 +209,12 @@ function renderDocxTemplate(docxBuffer, templateData) {
     throw new Error(detail);
   }
 
-  return doc.getZip().generate({
+  const renderedBuffer = doc.getZip().generate({
     type: 'nodebuffer',
     compression: 'DEFLATE'
   });
+
+  return applyRubricaCompactionToDocxBuffer(renderedBuffer);
 }
 
 async function convertDocxBufferToPdf(docxBuffer) {
@@ -148,5 +236,6 @@ module.exports = {
   removeExcessRowsFromDocxBuffer,
   renderDocxTemplate,
   convertDocxBufferToPdf,
-  saveOutputBuffer
+  saveOutputBuffer,
+  applyRubricaCompactionToDocxBuffer
 };
