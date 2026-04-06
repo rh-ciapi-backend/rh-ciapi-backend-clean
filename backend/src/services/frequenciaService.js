@@ -23,6 +23,12 @@ function onlyDigits(value) {
   return String(value || "").replace(/\D/g, "");
 }
 
+function safeText(value) {
+  if (value === null || value === undefined) return "";
+  const text = String(value).trim();
+  return text || "";
+}
+
 function pick(obj, keys, fallback = "") {
   for (const key of keys) {
     if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
@@ -30,6 +36,17 @@ function pick(obj, keys, fallback = "") {
     }
   }
   return fallback;
+}
+
+function normalizeCargaHoraria(value) {
+  const text = safeText(value);
+  if (!text) return "";
+
+  if (/^\d+([.,]\d+)?$/.test(text)) {
+    return `${text.replace(",", ".")}h`;
+  }
+
+  return text;
 }
 
 function normalizeServidor(row) {
@@ -48,19 +65,49 @@ function normalizeServidor(row) {
     "Servidor sem nome"
   );
 
+  const chDiaria = normalizeCargaHoraria(
+    pick(row, [
+      "ch_diaria",
+      "chDiaria",
+      "ch_diária",
+      "CH_DIARIA",
+      "CH_DIÁRIA",
+      "c_h_diaria",
+      "carga_horaria_diaria",
+      "cargaHorariaDiaria",
+      "carga_horaria_dia",
+      "cargaHorariaDia",
+      "carga_diaria",
+    ])
+  );
+
+  const chSemanal = normalizeCargaHoraria(
+    pick(row, [
+      "ch_semanal",
+      "chSemanal",
+      "CH_SEMANAL",
+      "c_h_semanal",
+      "carga_horaria_semanal",
+      "cargaHorariaSemanal",
+      "carga_semanal",
+      "carga_horaria",
+      "cargaHoraria",
+    ])
+  );
+
   return {
     id,
     nome,
     cpf,
     matricula: pick(row, ["matricula", "registro", "mat"]),
     categoria: pick(row, ["categoria_canonic", "categoria_canonica", "categoria"]),
-    cargo: pick(row, ["cargo", "funcao", "role"]),
-    setor: pick(row, ["setor", "lotacao", "departamento"]),
-    unidade: pick(row, ["unidade", "orgao", "secretaria", "setor"]),
-    lotacao: pick(row, ["lotacao", "setor", "departamento"]),
+    cargo: pick(row, ["cargo", "funcao", "função", "role"]),
+    setor: pick(row, ["setor", "lotacao", "lotação", "departamento"]),
+    unidade: pick(row, ["unidade", "orgao", "órgão", "secretaria", "setor"]),
+    lotacao: pick(row, ["lotacao", "lotação", "setor", "departamento"]),
     status: pick(row, ["status", "situacao"], ""),
-    chDiaria: pick(row, ["ch_diaria", "chDiaria", "carga_horaria_diaria"]),
-    chSemanal: pick(row, ["ch_semanal", "chSemanal", "carga_horaria_semanal"]),
+    chDiaria,
+    chSemanal,
     raw: row,
   };
 }
