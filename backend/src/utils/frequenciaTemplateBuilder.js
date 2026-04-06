@@ -71,8 +71,10 @@ function abbreviateFacultativo(value) {
   if (!text) return '';
 
   return text
-    .replace(/PONTO\s+FACULTATIVO/gi, 'P. FACULTATIVO')
-    .replace(/PONTO\s+FAC\./gi, 'P. FACULTATIVO');
+    .replace(/PONTO\s+FACULTATIVO/gi, 'P. FACULT.')
+    .replace(/PONTO\s+FAC\./gi, 'P. FACULT.')
+    .replace(/P\.\s*FACULTATIVO/gi, 'P. FACULT.')
+    .replace(/FACULTATIVO/gi, 'FACULT.');
 }
 
 function extractTextsFromDayItem(dayItem = {}) {
@@ -112,7 +114,7 @@ function resolveRubrica(dayItem = {}) {
   const texts = extractTextsFromDayItem(dayItem);
 
   if (hasAny(texts, ['FERIAS', 'FÉRIAS'])) return 'FÉRIAS';
-  if (hasAny(texts, ['PONTO FACULTATIVO', 'FACULTATIVO'])) return 'FACULTATIVO';
+  if (hasAny(texts, ['PONTO FACULTATIVO', 'FACULTATIVO'])) return 'P. FACULT.';
   if (hasAny(texts, ['FERIADO'])) return 'FERIADO';
   if (hasAny(texts, ['ANIVERSARIO', 'ANIVERSÁRIO'])) return 'ANIVERSÁRIO';
   if (hasAny(texts, ['SABADO', 'SÁBADO'])) return 'SABADO';
