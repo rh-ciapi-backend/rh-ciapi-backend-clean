@@ -109,7 +109,9 @@ function resolveRubrica(dayItem = {}) {
   if (hasAny(texts, ['SABADO', 'SÁBADO'])) return 'SABADO';
   if (hasAny(texts, ['DOMINGO'])) return 'DOMINGO';
 
-  return safeText(dayItem?.rubrica || dayItem?.turno1?.rubrica || dayItem?.turno2?.rubrica || '');
+  return safeText(
+    dayItem?.rubrica || dayItem?.turno1?.rubrica || dayItem?.turno2?.rubrica || ''
+  );
 }
 
 function resolveHorasPlaceholder(rubrica) {
