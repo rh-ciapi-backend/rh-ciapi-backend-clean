@@ -115,6 +115,11 @@ const frequenciaExportRoutes = safeRequire(
   "frequenciaExportRoutes"
 );
 
+const eventosRoutes = safeRequire(
+  "./src/routes/eventosRoutes",
+  "eventosRoutes"
+);
+
 const adminRoutes = safeRequire(
   "./src/routes/adminRoutes",
   "adminRoutes"
@@ -137,6 +142,7 @@ app.get("/health", (_req, res) => {
       feriasExport: Boolean(feriasExportRoutes),
       frequencia: Boolean(frequenciaRoutes),
       frequenciaExport: Boolean(frequenciaExportRoutes),
+      eventos: Boolean(eventosRoutes),
       administracao: Boolean(adminRoutes),
     },
   });
@@ -186,6 +192,12 @@ if (frequenciaExportRoutes) {
   console.warn("[BOOT] Rotas de exportação da frequência não registradas.");
 }
 
+if (eventosRoutes) {
+  app.use("/api/eventos", eventosRoutes);
+} else {
+  console.warn("[BOOT] Rotas de eventos não registradas.");
+}
+
 if (adminRoutes) {
   app.use("/api/admin", adminRoutes);
 } else {
@@ -222,6 +234,8 @@ app.listen(PORT, () => {
   console.log("Frequência: GET /api/frequencia");
   console.log("Exportação de frequência: POST /api/frequencia/exportar");
   console.log("Exportação de férias: POST /api/ferias/exportar");
+  console.log("Eventos: GET /api/eventos");
+  console.log("Tipos de evento: GET /api/eventos/tipos");
   console.log("Administração: GET /api/admin/users");
   console.log("Logs de auditoria: GET /api/admin/logs");
 });
