@@ -23,12 +23,6 @@ function onlyDigits(value) {
   return String(value || "").replace(/\D/g, "");
 }
 
-function safeText(value) {
-  if (value === null || value === undefined) return "";
-  const text = String(value).trim();
-  return text || "";
-}
-
 function pick(obj, keys, fallback = "") {
   for (const key of keys) {
     if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
@@ -36,17 +30,6 @@ function pick(obj, keys, fallback = "") {
     }
   }
   return fallback;
-}
-
-function normalizeCargaHoraria(value) {
-  const text = safeText(value);
-  if (!text) return "";
-
-  if (/^\d+([.,]\d+)?$/.test(text)) {
-    return `${text.replace(",", ".")}h`;
-  }
-
-  return text;
 }
 
 function normalizeServidor(row) {
@@ -65,49 +48,19 @@ function normalizeServidor(row) {
     "Servidor sem nome"
   );
 
-  const chDiaria = normalizeCargaHoraria(
-    pick(row, [
-      "ch_diaria",
-      "chDiaria",
-      "ch_diária",
-      "CH_DIARIA",
-      "CH_DIÁRIA",
-      "c_h_diaria",
-      "carga_horaria_diaria",
-      "cargaHorariaDiaria",
-      "carga_horaria_dia",
-      "cargaHorariaDia",
-      "carga_diaria",
-    ])
-  );
-
-  const chSemanal = normalizeCargaHoraria(
-    pick(row, [
-      "ch_semanal",
-      "chSemanal",
-      "CH_SEMANAL",
-      "c_h_semanal",
-      "carga_horaria_semanal",
-      "cargaHorariaSemanal",
-      "carga_semanal",
-      "carga_horaria",
-      "cargaHoraria",
-    ])
-  );
-
   return {
     id,
     nome,
     cpf,
     matricula: pick(row, ["matricula", "registro", "mat"]),
     categoria: pick(row, ["categoria_canonic", "categoria_canonica", "categoria"]),
-    cargo: pick(row, ["cargo", "funcao", "função", "role"]),
-    setor: pick(row, ["setor", "lotacao", "lotação", "departamento"]),
-    unidade: pick(row, ["unidade", "orgao", "órgão", "secretaria", "setor"]),
-    lotacao: pick(row, ["lotacao", "lotação", "setor", "departamento"]),
+    cargo: pick(row, ["cargo", "funcao", "role"]),
+    setor: pick(row, ["setor", "lotacao", "departamento"]),
+    unidade: pick(row, ["unidade", "orgao", "secretaria", "setor"]),
+    lotacao: pick(row, ["lotacao", "setor", "departamento"]),
     status: pick(row, ["status", "situacao"], ""),
-    chDiaria,
-    chSemanal,
+    chDiaria: pick(row, ["ch_diaria", "chDiaria", "carga_horaria_diaria"]),
+    chSemanal: pick(row, ["ch_semanal", "chSemanal", "carga_horaria_semanal"]),
     raw: row,
   };
 }
@@ -431,6 +384,43 @@ async function listarFrequenciaMensal(params = {}) {
     status: params.status || undefined,
   });
 
+  console.log(
+    "[FREQUENCIA DEBUG] SERVIDORES NORMALIZADOS:",
+    JSON.stringify(
+      servidores.map((s) => ({
+        id: s.id,
+        nome: s.nome,
+        cpf: s.cpf,
+        matricula: s.matricula,
+        categoria: s.categoria,
+        cargo: s.cargo,
+        setor: s.setor,
+        unidade: s.unidade,
+        lotacao: s.lotacao,
+        status: s.status,
+        chDiaria: s.chDiaria,
+        chSemanal: s.chSemanal,
+        raw: s.raw
+          ? {
+              ch_diaria: s.raw.ch_diaria,
+              ch_diária: s.raw["ch_diária"],
+              chDiaria: s.raw.chDiaria,
+              ch_semanal: s.raw.ch_semanal,
+              chSemanal: s.raw.chSemanal,
+              carga_horaria: s.raw.carga_horaria,
+              cargaHoraria: s.raw.cargaHoraria,
+              carga_horaria_diaria: s.raw.carga_horaria_diaria,
+              cargaHorariaDiaria: s.raw.cargaHorariaDiaria,
+              carga_horaria_semanal: s.raw.carga_horaria_semanal,
+              cargaHorariaSemanal: s.raw.cargaHorariaSemanal,
+            }
+          : null,
+      })),
+      null,
+      2
+    )
+  );
+
   if (!servidores.length) {
     return {
       ok: true,
@@ -477,6 +467,37 @@ async function listarFrequenciaMensal(params = {}) {
   const ocorrenciasGrouped = groupByServidor(servidores, ocorrencias);
 
   const data = servidores.map((servidor) => {
+    console.log(
+      "[FREQUENCIA DEBUG] SERVIDOR ANTES DO TEMPLATE:",
+      JSON.stringify(
+        {
+          id: servidor.id,
+          nome: servidor.nome,
+          cpf: servidor.cpf,
+          matricula: servidor.matricula,
+          chDiaria: servidor.chDiaria,
+          chSemanal: servidor.chSemanal,
+          raw: servidor.raw
+            ? {
+                ch_diaria: servidor.raw.ch_diaria,
+                ch_diária: servidor.raw["ch_diária"],
+                chDiaria: servidor.raw.chDiaria,
+                ch_semanal: servidor.raw.ch_semanal,
+                chSemanal: servidor.raw.chSemanal,
+                carga_horaria: servidor.raw.carga_horaria,
+                cargaHoraria: servidor.raw.cargaHoraria,
+                carga_horaria_diaria: servidor.raw.carga_horaria_diaria,
+                cargaHorariaDiaria: servidor.raw.cargaHorariaDiaria,
+                carga_horaria_semanal: servidor.raw.carga_horaria_semanal,
+                cargaHorariaSemanal: servidor.raw.cargaHorariaSemanal,
+              }
+            : null,
+        },
+        null,
+        2
+      )
+    );
+
     const servidorFerias =
       (servidor.cpf && feriasGrouped.byCpf.get(servidor.cpf)) ||
       (servidor.id && feriasGrouped.byId.get(String(servidor.id))) ||
