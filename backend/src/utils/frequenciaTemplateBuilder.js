@@ -112,7 +112,7 @@ function resolveRubrica(dayItem = {}) {
   const texts = extractTextsFromDayItem(dayItem);
 
   if (hasAny(texts, ['FERIAS', 'FÉRIAS'])) return 'FÉRIAS';
-  if (hasAny(texts, ['PONTO FACULTATIVO', 'FACULTATIVO'])) return 'P. FACULTATIVO';
+  if (hasAny(texts, ['PONTO FACULTATIVO', 'FACULTATIVO'])) return 'FACULTATIVO';
   if (hasAny(texts, ['FERIADO'])) return 'FERIADO';
   if (hasAny(texts, ['ANIVERSARIO', 'ANIVERSÁRIO'])) return 'ANIVERSÁRIO';
   if (hasAny(texts, ['SABADO', 'SÁBADO'])) return 'SABADO';
