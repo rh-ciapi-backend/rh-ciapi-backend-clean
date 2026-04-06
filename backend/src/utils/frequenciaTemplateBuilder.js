@@ -47,16 +47,26 @@ function firstNonEmpty(...values) {
   return '';
 }
 
-function normalizeCargaHoraria(value) {
+function parseNumericHours(value) {
+  const text = safeText(value);
+  if (!text) return null;
+
+  const match = text.replace(',', '.').match(/(\d+(?:\.\d+)?)/);
+  if (!match) return null;
+
+  const num = Number(match[1]);
+  return Number.isFinite(num) ? num : null;
+}
+
+function formatHoursValue(value) {
   const text = safeText(value);
   if (!text) return '';
 
-  if (/^\d+([.,]\d+)?$/.test(text)) {
-    const normalized = text.replace(',', '.');
-    return `${normalized}h`;
-  }
+  const num = parseNumericHours(text);
+  if (num === null) return text;
 
-  return text;
+  if (Number.isInteger(num)) return `${num}h`;
+  return `${String(num).replace('.', ',')}h`;
 }
 
 function abbreviateFacultativo(value) {
@@ -70,46 +80,111 @@ function abbreviateFacultativo(value) {
     .replace(/FACULTATIVO/gi, 'FACULT.');
 }
 
-function normalizeServidorHeader(servidor = {}) {
-  const chDiaria = normalizeCargaHoraria(
-    firstNonEmpty(
-      servidor.chDiaria,
-      servidor.ch_diaria,
-      servidor['ch_diária'],
-      servidor.CH_DIARIA,
-      servidor.CH_DIÁRIA,
-      servidor.c_h_diaria,
-      servidor.carga_horaria_diaria,
-      servidor.cargaHorariaDiaria,
-      servidor.carga_horaria_dia,
-      servidor.cargaHorariaDia,
-      servidor.carga_diaria
-    )
+function getServidorField(servidor = {}, keys = []) {
+  const raw = servidor.raw || {};
+
+  for (const key of keys) {
+    if (servidor[key] !== undefined && servidor[key] !== null && servidor[key] !== '') {
+      return servidor[key];
+    }
+    if (raw[key] !== undefined && raw[key] !== null && raw[key] !== '') {
+      return raw[key];
+    }
+  }
+
+  return '';
+}
+
+function resolveCargaHoraria(servidor = {}) {
+  const chDiariaRaw = firstNonEmpty(
+    getServidorField(servidor, [
+      'chDiaria',
+      'ch_diaria',
+      'ch_diária',
+      'CH_DIARIA',
+      'CH_DIÁRIA',
+      'c_h_diaria',
+      'carga_horaria_diaria',
+      'cargaHorariaDiaria',
+      'carga_horaria_dia',
+      'cargaHorariaDia',
+      'carga_diaria',
+      'horas_dia',
+      'horasDia',
+    ])
   );
 
-  const chSemanal = normalizeCargaHoraria(
-    firstNonEmpty(
-      servidor.chSemanal,
-      servidor.ch_semanal,
-      servidor['ch_semanal'],
-      servidor.CH_SEMANAL,
-      servidor.c_h_semanal,
-      servidor.carga_horaria_semanal,
-      servidor.cargaHorariaSemanal,
-      servidor.carga_semanal
-    )
+  const chSemanalRaw = firstNonEmpty(
+    getServidorField(servidor, [
+      'chSemanal',
+      'ch_semanal',
+      'CH_SEMANAL',
+      'c_h_semanal',
+      'carga_horaria_semanal',
+      'cargaHorariaSemanal',
+      'carga_semanal',
+      'carga_horaria',
+      'cargaHoraria',
+      'horas_semana',
+      'horasSemana',
+    ])
   );
+
+  let chDiaria = formatHoursValue(chDiariaRaw);
+  let chSemanal = formatHoursValue(chSemanalRaw);
+
+  const diariaNum = parseNumericHours(chDiariaRaw);
+  const semanalNum = parseNumericHours(chSemanalRaw);
+
+  if (!chDiaria && semanalNum !== null) {
+    const derived = semanalNum / 5;
+    chDiaria = Number.isInteger(derived)
+      ? `${derived}h`
+      : `${String(derived).replace('.', ',')}h`;
+  }
+
+  if (!chSemanal && diariaNum !== null) {
+    const derived = diariaNum * 5;
+    chSemanal = Number.isInteger(derived)
+      ? `${derived}h`
+      : `${String(derived).replace('.', ',')}h`;
+  }
 
   return {
-    NOME: firstNonEmpty(servidor.nome, servidor.nome_completo, servidor.nomeCompleto),
-    MATRICULA: firstNonEmpty(servidor.matricula, servidor.registro, servidor.mat),
-    CPF: safeText(onlyDigits(firstNonEmpty(servidor.cpf, servidor.documento))),
-    CARGO: firstNonEmpty(servidor.cargo, servidor.funcao, servidor.função),
-    CATEGORIA: firstNonEmpty(servidor.categoria, servidor.categoria_canonica, servidor.categoriaCanonica),
+    chDiaria,
+    chSemanal,
+  };
+}
+
+function normalizeServidorHeader(servidor = {}) {
+  const { chDiaria, chSemanal } = resolveCargaHoraria(servidor);
+
+  return {
+    NOME: firstNonEmpty(
+      getServidorField(servidor, ['nome', 'nome_completo', 'nomeCompleto'])
+    ),
+    MATRICULA: firstNonEmpty(
+      getServidorField(servidor, ['matricula', 'registro', 'mat'])
+    ),
+    CPF: safeText(
+      onlyDigits(
+        firstNonEmpty(getServidorField(servidor, ['cpf', 'documento']))
+      )
+    ),
+    CARGO: firstNonEmpty(
+      getServidorField(servidor, ['cargo', 'funcao', 'função', 'role'])
+    ),
+    CATEGORIA: firstNonEmpty(
+      getServidorField(servidor, ['categoria', 'categoria_canonica', 'categoriaCanonica'])
+    ),
     CH_DIARIA: chDiaria,
     CH_SEMANAL: chSemanal,
-    UNIDADE: firstNonEmpty(servidor.unidade, servidor.orgao, servidor.órgão, servidor.setor),
-    LOTACAO: firstNonEmpty(servidor.lotacao, servidor.lotação, servidor.setor),
+    UNIDADE: firstNonEmpty(
+      getServidorField(servidor, ['unidade', 'orgao', 'órgão', 'secretaria', 'setor'])
+    ),
+    LOTACAO: firstNonEmpty(
+      getServidorField(servidor, ['lotacao', 'lotação', 'setor', 'departamento'])
+    ),
   };
 }
 
