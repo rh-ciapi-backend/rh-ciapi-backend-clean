@@ -103,15 +103,21 @@ function normalizeEventoRow(row) {
   };
 }
 
+function getErrorMessage(error) {
+  if (!error) return "";
+  if (error instanceof Error) return error.message || "";
+  return String(error || "");
+}
+
 function isMissingColumnError(error, columnName) {
-  const message =
-    error instanceof Error ? error.message : String(error || "");
-  const normalized = message.toLowerCase();
+  const message = getErrorMessage(error).toLowerCase();
+  const col = String(columnName || "").toLowerCase();
 
   return (
-    normalized.includes(`column`) &&
-    normalized.includes(columnName.toLowerCase()) &&
-    normalized.includes("does not exist")
+    (message.includes("column") && message.includes(col) && message.includes("does not exist")) ||
+    (message.includes("could not find") && message.includes(col) && message.includes("schema cache")) ||
+    (message.includes(`'${col}'`) && message.includes("schema cache")) ||
+    (message.includes(`"${col}"`) && message.includes("schema cache"))
   );
 }
 
@@ -143,7 +149,7 @@ async function listarEventos(supabase, filters = {}) {
   const tipo = safeString(filters.tipo);
   const ativo = filters.ativo;
 
-  async function runQuery(useAtivoFilter) {
+  async function execute(useAtivoFilter) {
     let query = supabase.from(table).select("*").order("data", { ascending: true });
 
     if (Number.isFinite(ano) && Number.isFinite(mes) && mes >= 1 && mes <= 12) {
@@ -169,10 +175,10 @@ async function listarEventos(supabase, filters = {}) {
     return query;
   }
 
-  let result = await runQuery(true);
+  let result = await execute(true);
 
   if (result.error && isMissingColumnError(result.error, "ativo")) {
-    result = await runQuery(false);
+    result = await execute(false);
   }
 
   if (result.error) {
