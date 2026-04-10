@@ -3,33 +3,43 @@ const { getMapaPreview } = require('../services/mapasService');
 
 const router = express.Router();
 
+function normalizeFilters(source = {}) {
+  return {
+    mes: Number(source.mes) || new Date().getMonth() + 1,
+    ano: Number(source.ano) || new Date().getFullYear(),
+    categoria: String(source.categoria || '').trim(),
+    setor: String(source.setor || '').trim(),
+    status: String(source.status || 'ATIVO').trim().toUpperCase(),
+    layout: String(source.layout || 'automatico').trim(),
+    modoExportacao: String(source.modoExportacao || 'arquivo_unico').trim(),
+  };
+}
+
 router.get('/preview', async (req, res) => {
   try {
-    const filters = {
-      mes: Number(req.query.mes),
-      ano: Number(req.query.ano),
-      categoria: req.query.categoria || '',
-      setor: req.query.setor || '',
-      status: req.query.status || 'ATIVO',
-      layout: req.query.layout || 'automatico',
-      modoExportacao: req.query.modoExportacao || 'arquivo_unico',
-    };
-
+    const filters = normalizeFilters(req.query || {});
     const payload = await getMapaPreview(filters);
-    res.json(payload);
+    return res.json(payload);
   } catch (error) {
     console.error('[mapas/preview]', error);
-    res.status(500).json({ ok: false, message: error.message || 'Erro ao montar preview do mapa.' });
+    return res.status(500).json({
+      ok: false,
+      message: error instanceof Error ? error.message : 'Erro ao montar preview do mapa.',
+    });
   }
 });
 
 router.post('/validar', async (req, res) => {
   try {
-    const payload = await getMapaPreview(req.body || {});
-    res.json(payload);
+    const filters = normalizeFilters(req.body || {});
+    const payload = await getMapaPreview(filters);
+    return res.json(payload);
   } catch (error) {
     console.error('[mapas/validar]', error);
-    res.status(500).json({ ok: false, message: error.message || 'Erro ao validar dados do mapa.' });
+    return res.status(500).json({
+      ok: false,
+      message: error instanceof Error ? error.message : 'Erro ao validar dados do mapa.',
+    });
   }
 });
 
