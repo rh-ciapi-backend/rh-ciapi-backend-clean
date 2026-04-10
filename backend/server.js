@@ -115,6 +115,16 @@ const frequenciaExportRoutes = safeRequire(
   "frequenciaExportRoutes"
 );
 
+const mapasRoutes = safeRequire(
+  "./src/routes/mapasRoutes",
+  "mapasRoutes"
+);
+
+const mapasExportRoutes = safeRequire(
+  "./src/routes/mapasExportRoutes",
+  "mapasExportRoutes"
+);
+
 const eventosRoutes = safeRequire(
   "./src/routes/eventosRoutes",
   "eventosRoutes"
@@ -142,6 +152,8 @@ app.get("/health", (_req, res) => {
       feriasExport: Boolean(feriasExportRoutes),
       frequencia: Boolean(frequenciaRoutes),
       frequenciaExport: Boolean(frequenciaExportRoutes),
+      mapas: Boolean(mapasRoutes),
+      mapasExport: Boolean(mapasExportRoutes),
       eventos: Boolean(eventosRoutes),
       administracao: Boolean(adminRoutes),
     },
@@ -192,6 +204,18 @@ if (frequenciaExportRoutes) {
   console.warn("[BOOT] Rotas de exportação da frequência não registradas.");
 }
 
+if (mapasRoutes) {
+  app.use("/api/mapas", mapasRoutes);
+} else {
+  console.warn("[BOOT] Rotas principais de mapas não registradas.");
+}
+
+if (mapasExportRoutes) {
+  app.use("/api/mapas", mapasExportRoutes);
+} else {
+  console.warn("[BOOT] Rotas de exportação dos mapas não registradas.");
+}
+
 if (eventosRoutes) {
   app.use("/api/eventos", eventosRoutes);
 } else {
@@ -233,6 +257,11 @@ app.listen(PORT, () => {
   console.log("Servidores: GET /api/servidores");
   console.log("Frequência: GET /api/frequencia");
   console.log("Exportação de frequência: POST /api/frequencia/exportar");
+  console.log("Mapas: GET /api/mapas/preview");
+  console.log("Validação de mapas: POST /api/mapas/validar");
+  console.log("Exportação de mapas DOCX: POST /api/mapas/exportar/docx");
+  console.log("Exportação de mapas PDF: POST /api/mapas/exportar/pdf");
+  console.log("Exportação de mapas ZIP: POST /api/mapas/exportar/zip");
   console.log("Exportação de férias: POST /api/ferias/exportar");
   console.log("Eventos: GET /api/eventos");
   console.log("Tipos de evento: GET /api/eventos/tipos");
