@@ -24,12 +24,16 @@ function resolveLayout(requestedLayout, linhas) {
 async function safeSelect(table, builder) {
   try {
     let query = supabase.from(table).select('*');
+
     if (typeof builder === 'function') {
       query = builder(query) || query;
     }
+
     const { data, error } = await query;
+
     if (error) {
       const msg = String(error.message || '');
+
       if (
         msg.includes('does not exist') ||
         msg.includes('Could not find') ||
@@ -40,8 +44,10 @@ async function safeSelect(table, builder) {
         console.warn(`[mapasService] tabela/estrutura não disponível: ${table} -> ${msg}`);
         return [];
       }
+
       throw error;
     }
+
     return safeArray(data);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -61,7 +67,10 @@ async function fetchServidores(filters) {
   if (filters.status && filters.status !== 'TODOS') query = query.eq('status', filters.status);
 
   const { data, error } = await query;
-  if (error) throw new Error(`Erro ao consultar servidores: ${error.message}`);
+
+  if (error) {
+    throw new Error(`Erro ao consultar servidores: ${error.message}`);
+  }
 
   return safeArray(data);
 }
@@ -88,6 +97,7 @@ function samePerson(item, servidor) {
 
   if (cpfA && cpfB) return cpfA === cpfB;
   if (nomeA && nomeB) return nomeA.toUpperCase() === nomeB.toUpperCase();
+
   return false;
 }
 
@@ -110,6 +120,7 @@ function buildObservacao(servidor, ocorrencias) {
       servidor.obs ||
       servidor.descricao
   );
+
   if (baseObs) observacoes.push(baseObs);
 
   if (faltasServidor.length) {
@@ -120,6 +131,7 @@ function buildObservacao(servidor, ocorrencias) {
     const primeiro = atestadosServidor[0];
     const inicio = primeiro?.data_inicio || primeiro?.inicio || primeiro?.data;
     const fim = primeiro?.data_fim || primeiro?.fim || '';
+
     observacoes.push(
       fim
         ? `Atestado no período de ${formatPeriodo(inicio, fim)}.`
@@ -131,6 +143,7 @@ function buildObservacao(servidor, ocorrencias) {
     const f = feriasServidor[0];
     const p1i = f?.periodo1_inicio || f?.data_inicio || '';
     const p1f = f?.periodo1_fim || f?.data_fim || '';
+
     if (p1i || p1f) {
       observacoes.push(`Férias no período de ${formatPeriodo(p1i, p1f)}.`);
     }
@@ -218,6 +231,7 @@ async function getMapaPreview(filters) {
 
   const servidores = await fetchServidores(normalizedFilters);
   const ocorrencias = await fetchOcorrencias(normalizedFilters);
+
   const linhas = servidores.map((servidor, index) =>
     buildLinhaFromServidor(servidor, index, normalizedFilters, ocorrencias)
   );
