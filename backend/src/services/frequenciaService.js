@@ -32,6 +32,81 @@ function pick(obj, keys, fallback = "") {
   return fallback;
 }
 
+function parseCargaHoraria(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return null;
+
+  const match = text.replace(",", ".").match(/(\d+(?:\.\d+)?)/);
+  if (!match) return null;
+
+  const num = Number(match[1]);
+  return Number.isFinite(num) ? num : null;
+}
+
+function formatCargaHoraria(value) {
+  const num = parseCargaHoraria(value);
+  if (num === null) return "";
+
+  if (Number.isInteger(num)) return `${num}h`;
+  return `${String(num).replace(".", ",")}h`;
+}
+
+function resolveCargaServidor(row = {}) {
+  // No cadastro/edição de servidores, o campo principal é carga_horaria.
+  // Ele precisa ter prioridade sobre campos derivados antigos para que a
+  // frequência reflita imediatamente a última alteração feita na tela Servidores.
+  const cargaSemanalRaw = pick(row, [
+    "carga_horaria",
+    "cargaHoraria",
+    "carga",
+    "carga_horaria_semanal",
+    "cargaHorariaSemanal",
+    "ch_semanal",
+    "chSemanal",
+    "horas_semana",
+    "horasSemana",
+  ]);
+
+  const cargaDiariaRaw = pick(row, [
+    "ch_diaria",
+    "chDiaria",
+    "ch_diária",
+    "carga_horaria_diaria",
+    "cargaHorariaDiaria",
+    "carga_horaria_dia",
+    "cargaHorariaDia",
+    "horas_dia",
+    "horasDia",
+  ]);
+
+  const semanalNum = parseCargaHoraria(cargaSemanalRaw);
+  const diariaNum = parseCargaHoraria(cargaDiariaRaw);
+
+  let chSemanal = formatCargaHoraria(cargaSemanalRaw);
+  let chDiaria = formatCargaHoraria(cargaDiariaRaw);
+
+  if (!chDiaria && semanalNum !== null) {
+    const derived = semanalNum / 5;
+    chDiaria = Number.isInteger(derived)
+      ? `${derived}h`
+      : `${String(derived).replace(".", ",")}h`;
+  }
+
+  if (!chSemanal && diariaNum !== null) {
+    const derived = diariaNum * 5;
+    chSemanal = Number.isInteger(derived)
+      ? `${derived}h`
+      : `${String(derived).replace(".", ",")}h`;
+  }
+
+  return {
+    cargaHoraria: chSemanal,
+    carga_horaria: chSemanal,
+    chDiaria,
+    chSemanal,
+  };
+}
+
 function normalizeServidor(row) {
   const cpf = onlyDigits(
     pick(row, ["cpf", "servidor_cpf", "cpf_servidor", "documento"])
@@ -48,6 +123,8 @@ function normalizeServidor(row) {
     "Servidor sem nome"
   );
 
+  const carga = resolveCargaServidor(row);
+
   return {
     id,
     nome,
@@ -59,8 +136,10 @@ function normalizeServidor(row) {
     unidade: pick(row, ["unidade", "orgao", "secretaria", "setor"]),
     lotacao: pick(row, ["lotacao", "setor", "departamento"]),
     status: pick(row, ["status", "situacao"], ""),
-    chDiaria: pick(row, ["ch_diaria", "chDiaria", "carga_horaria_diaria"]),
-    chSemanal: pick(row, ["ch_semanal", "chSemanal", "carga_horaria_semanal"]),
+    cargaHoraria: carga.cargaHoraria,
+    carga_horaria: carga.carga_horaria,
+    chDiaria: carga.chDiaria,
+    chSemanal: carga.chSemanal,
     raw: row,
   };
 }
@@ -398,6 +477,8 @@ async function listarFrequenciaMensal(params = {}) {
         unidade: s.unidade,
         lotacao: s.lotacao,
         status: s.status,
+        cargaHoraria: s.cargaHoraria,
+        carga_horaria: s.carga_horaria,
         chDiaria: s.chDiaria,
         chSemanal: s.chSemanal,
         raw: s.raw
@@ -475,6 +556,8 @@ async function listarFrequenciaMensal(params = {}) {
           nome: servidor.nome,
           cpf: servidor.cpf,
           matricula: servidor.matricula,
+          cargaHoraria: servidor.cargaHoraria,
+          carga_horaria: servidor.carga_horaria,
           chDiaria: servidor.chDiaria,
           chSemanal: servidor.chSemanal,
           raw: servidor.raw
@@ -522,8 +605,11 @@ async function listarFrequenciaMensal(params = {}) {
         unidade: servidor.unidade,
         lotacao: servidor.lotacao,
         status: servidor.status,
+        cargaHoraria: servidor.cargaHoraria,
+        carga_horaria: servidor.carga_horaria,
         chDiaria: servidor.chDiaria,
         chSemanal: servidor.chSemanal,
+        raw: servidor.raw,
       },
       ferias: servidorFerias,
       eventos,
