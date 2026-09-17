@@ -18,6 +18,7 @@ const PERMISSION_MODULES = [
   'mapas',
   'atestados',
   'eventos',
+  'sae_profissionais',
   'administracao',
   'relatorios',
   'exportacoes',
