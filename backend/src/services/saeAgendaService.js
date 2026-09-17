@@ -385,9 +385,42 @@ async function listOfficialAgenda(supabase, profissionalId, options = {}) {
 
   if (error) throw error;
 
+  const { data: vinculos, error: vinculosError } = await supabase
+    .from('sae_profissional_servicos')
+    .select('servico_id,ativo')
+    .eq('profissional_id', profissional.id)
+    .eq('ativo', true);
+
+  if (vinculosError) throw vinculosError;
+
+  const servicoIds = (vinculos || [])
+    .map((item) => safeString(item.servico_id))
+    .filter(Boolean);
+
+  let servicos = [];
+
+  if (servicoIds.length > 0) {
+    const { data: servicosData, error: servicosError } = await supabase
+      .from('sae_servicos')
+      .select('id,nome,sigla,ativo')
+      .in('id', servicoIds)
+      .eq('ativo', true)
+      .order('nome', { ascending: true });
+
+    if (servicosError) throw servicosError;
+
+    servicos = (servicosData || []).map((item) => ({
+      id: safeString(item.id),
+      nome: safeString(item.nome),
+      sigla: safeString(item.sigla) || null,
+      ativo: Boolean(item.ativo),
+    }));
+  }
+
   return {
     profissional,
     agenda: (data || []).map(normalizeAgenda),
+    servicos,
   };
 }
 
