@@ -140,6 +140,11 @@ const saeProfissionaisRoutes = safeRequire(
   "saeProfissionaisRoutes"
 );
 
+const saeAgendaRoutes = safeRequire(
+  "./src/routes/saeAgendaRoutes",
+  "saeAgendaRoutes"
+);
+
 app.get("/", (_req, res) => {
   return res.status(200).send("RH CIAPI Backend OK");
 });
@@ -162,6 +167,7 @@ app.get("/health", (_req, res) => {
       eventos: Boolean(eventosRoutes),
       administracao: Boolean(adminRoutes),
       saeProfissionais: Boolean(saeProfissionaisRoutes),
+      saeAgenda: Boolean(saeAgendaRoutes),
     },
   });
 });
@@ -240,6 +246,12 @@ if (saeProfissionaisRoutes) {
   console.warn("[BOOT] Rotas de profissionais do SAE não registradas.");
 }
 
+if (saeAgendaRoutes) {
+  app.use("/api/sae/agenda", saeAgendaRoutes);
+} else {
+  console.warn("[BOOT] Rotas de agenda do SAE não registradas.");
+}
+
 app.use((req, res) => {
   return res.status(404).json({
     ok: false,
@@ -280,4 +292,5 @@ app.listen(PORT, () => {
   console.log("Administração: GET /api/admin/users");
   console.log("Logs de auditoria: GET /api/admin/logs");
   console.log("SAE Profissionais: GET /api/sae/profissionais");
+  console.log("SAE Agenda: GET /api/sae/agenda/profissionais/:profissionalId");
 });
