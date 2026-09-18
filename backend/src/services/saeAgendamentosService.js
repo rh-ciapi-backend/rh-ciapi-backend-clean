@@ -366,6 +366,226 @@ async function consultarDisponibilidade(supabase, params) {
   };
 }
 
+
+function addDaysIso(dateString, amount) {
+  const parsed = new Date(`${dateString}T12:00:00Z`);
+  parsed.setUTCDate(parsed.getUTCDate() + amount);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function diffDaysIso(startDate, endDate) {
+  const start = new Date(`${startDate}T12:00:00Z`);
+  const end = new Date(`${endDate}T12:00:00Z`);
+  return Math.floor((end.getTime() - start.getTime()) / 86400000);
+}
+
+async function consultarDisponibilidadePeriodo(supabase, params) {
+  const profissionalId = safeString(params?.profissionalId);
+  const servicoId = safeString(params?.servicoId);
+  const inicio = normalizeDate(params?.inicio);
+  const fim = normalizeDate(params?.fim);
+
+  if (fim < inicio) {
+    throw createHttpError('A data final deve ser igual ou posterior à data inicial.', 400);
+  }
+
+  const totalDias = diffDaysIso(inicio, fim);
+
+  if (totalDias > 62) {
+    throw createHttpError(
+      'Consulte no máximo 63 dias por vez para disponibilidade de agenda.',
+      400,
+    );
+  }
+
+  const [profissional, servico] = await Promise.all([
+    getProfessional(supabase, profissionalId),
+    getService(supabase, servicoId),
+  ]);
+
+  await assertProfessionalServiceLink(supabase, profissional.id, servico.id);
+
+  const { data: agendaRows, error: agendaError } = await supabase
+    .from('sae_agenda_profissionais')
+    .select(
+      'id,profissional_id,servico_id,dia_semana,hora_inicio,hora_fim,intervalo_inicio,intervalo_fim,duracao_slot_minutos,ativo',
+    )
+    .eq('profissional_id', profissional.id)
+    .eq('ativo', true)
+    .order('dia_semana', { ascending: true })
+    .order('hora_inicio', { ascending: true });
+
+  if (agendaError) throw agendaError;
+
+  const periodos = (agendaRows || []).filter((item) => {
+    const agendaServicoId = safeString(item.servico_id);
+    return !agendaServicoId || agendaServicoId === servico.id;
+  });
+
+  if (periodos.length === 0) {
+    return {
+      profissional,
+      servico,
+      inicio,
+      fim,
+      datas: [],
+    };
+  }
+
+  const { data: serviceRows, error: serviceError } = await supabase
+    .from('sae_agendamento_servicos')
+    .select('id,agendamento_id,hora_inicio,hora_fim,status')
+    .eq('profissional_id', profissional.id)
+    .not('hora_inicio', 'is', null);
+
+  if (serviceError) throw serviceError;
+
+  const activeServiceRows = (serviceRows || []).filter(
+    (item) => !isCancelledStatus(item.status),
+  );
+
+  const appointmentIds = Array.from(
+    new Set(
+      activeServiceRows
+        .map((item) => safeString(item.agendamento_id))
+        .filter(Boolean),
+    ),
+  );
+
+  const appointmentMap = new Map();
+
+  if (appointmentIds.length > 0) {
+    const { data: appointments, error: appointmentsError } = await supabase
+      .from('sae_agendamentos')
+      .select('id,data,status')
+      .in('id', appointmentIds)
+      .gte('data', inicio)
+      .lte('data', fim);
+
+    if (appointmentsError) throw appointmentsError;
+
+    for (const appointment of appointments || []) {
+      if (isCancelledStatus(appointment.status)) continue;
+      appointmentMap.set(safeString(appointment.id), appointment);
+    }
+  }
+
+  const ocupadosPorData = new Map();
+
+  for (const row of activeServiceRows) {
+    const appointment = appointmentMap.get(safeString(row.agendamento_id));
+    if (!appointment) continue;
+
+    const date = safeString(appointment.data);
+    if (!date) continue;
+
+    const list = ocupadosPorData.get(date) || [];
+    list.push({
+      horaInicio: safeString(row.hora_inicio),
+      horaFim: safeString(row.hora_fim) || safeString(row.hora_inicio),
+    });
+    ocupadosPorData.set(date, list);
+  }
+
+  const datas = [];
+
+  for (let offset = 0; offset <= totalDias; offset += 1) {
+    const data = addDaysIso(inicio, offset);
+    const weekday = dateToWeekday(data);
+
+    if (weekday < 1 || weekday > 5) continue;
+
+    const periodosDoDia = periodos.filter(
+      (item) => Number(item.dia_semana) === weekday,
+    );
+
+    if (periodosDoDia.length === 0) continue;
+
+    const ocupados = ocupadosPorData.get(data) || [];
+    const slotsMap = new Map();
+
+    for (const periodo of periodosDoDia) {
+      const agendaInicio = timeToMinutes(periodo.hora_inicio);
+      const agendaFim = timeToMinutes(periodo.hora_fim);
+      const intervaloInicio = timeToMinutes(periodo.intervalo_inicio);
+      const intervaloFim = timeToMinutes(periodo.intervalo_fim);
+      const duracao = Number(periodo.duracao_slot_minutos || 30);
+
+      if (
+        agendaInicio == null ||
+        agendaFim == null ||
+        !Number.isInteger(duracao) ||
+        duracao <= 0
+      ) {
+        continue;
+      }
+
+      for (
+        let cursor = agendaInicio;
+        cursor + duracao <= agendaFim;
+        cursor += duracao
+      ) {
+        const slotStart = cursor;
+        const slotEnd = cursor + duracao;
+
+        const overlapsInterval =
+          intervaloInicio != null &&
+          intervaloFim != null &&
+          slotStart < intervaloFim &&
+          intervaloInicio < slotEnd;
+
+        if (overlapsInterval) continue;
+
+        const horaInicio = minutesToTime(slotStart);
+        const horaFim = minutesToTime(slotEnd);
+
+        const ocupado = ocupados.some((item) =>
+          rangesOverlap(
+            horaInicio,
+            horaFim,
+            item.horaInicio,
+            item.horaFim,
+          ),
+        );
+
+        if (ocupado) continue;
+
+        const key = `${horaInicio}-${horaFim}`;
+
+        if (!slotsMap.has(key)) {
+          slotsMap.set(key, {
+            horaInicio,
+            horaFim,
+            turno: determineTurno(horaInicio),
+          });
+        }
+      }
+    }
+
+    const slots = Array.from(slotsMap.values()).sort((a, b) =>
+      a.horaInicio.localeCompare(b.horaInicio),
+    );
+
+    if (slots.length > 0) {
+      datas.push({
+        data,
+        quantidade: slots.length,
+        primeiroHorario: slots[0].horaInicio,
+        ultimoHorario: slots[slots.length - 1].horaInicio,
+      });
+    }
+  }
+
+  return {
+    profissional,
+    servico,
+    inicio,
+    fim,
+    datas,
+  };
+}
+
+
 async function resolveUsuario(supabase, payload) {
   const tipoUsuario = safeString(payload?.tipoUsuario).toUpperCase();
 
@@ -886,6 +1106,7 @@ module.exports = {
   listarCatalogo,
   buscarUsuarios,
   consultarDisponibilidade,
+  consultarDisponibilidadePeriodo,
   listarMeusAgendamentos,
   criarAgendamento,
   cancelarAgendamento,
