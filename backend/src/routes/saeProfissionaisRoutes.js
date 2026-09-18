@@ -140,6 +140,42 @@ router.patch(
   },
 );
 
+
+router.get(
+  '/usuarios-sistema',
+  requirePermission('sae_profissionais', 'visualizar'),
+  async (req, res, next) => {
+    try {
+      const usuarios = await saeProfissionaisService.listarUsuariosSistema(supabase);
+      return res.json({ usuarios });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+router.patch(
+  '/:id/usuario-sistema',
+  requirePermission('sae_profissionais', 'editar'),
+  async (req, res, next) => {
+    try {
+      const profissional = await saeProfissionaisService.vincularUsuarioSistema({
+        supabase,
+        authUser: req.authUser,
+        actor: req.currentUser,
+        auditLog,
+        profissionalId: req.params.id,
+        authUserId: req.body?.authUserId,
+        req,
+      });
+
+      return res.json({ ok: true, profissional });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
 router.delete(
   '/:id',
   requirePermission('sae_profissionais', 'excluir'),
