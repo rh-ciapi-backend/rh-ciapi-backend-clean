@@ -427,6 +427,308 @@ async function resolveUsuario(supabase, payload) {
   };
 }
 
+
+async function getProfessionalByAuthUser(supabase, authUserId) {
+  const id = safeString(authUserId);
+  if (!id) return null;
+
+  const { data, error } = await supabase
+    .from('sae_profissionais')
+    .select('id,nome,ativo,auth_user_id')
+    .eq('auth_user_id', id)
+    .limit(2);
+
+  if (error) throw error;
+
+  const rows = data || [];
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  if (rows.length > 1) {
+    throw createHttpError(
+      'Este usuário está vinculado a mais de um profissional do SAE.',
+      409,
+    );
+  }
+
+  return {
+    id: safeString(rows[0].id),
+    nome: safeString(rows[0].nome),
+    ativo: Boolean(rows[0].ativo),
+    authUserId: safeString(rows[0].auth_user_id) || null,
+  };
+}
+
+async function listarMeusAgendamentos(supabase, authUserId) {
+  const profissional = await getProfessionalByAuthUser(supabase, authUserId);
+
+  if (!profissional) {
+    throw createHttpError(
+      'Seu usuário ainda não está vinculado a um profissional do SAE.',
+      404,
+    );
+  }
+
+  const hoje = new Date().toISOString().slice(0, 10);
+
+  const { data: serviceRows, error: serviceError } = await supabase
+    .from('sae_agendamento_servicos')
+    .select(
+      'id,agendamento_id,servico_id,profissional_id,turno,hora_inicio,hora_fim,status,observacao',
+    )
+    .eq('profissional_id', profissional.id)
+    .not('hora_inicio', 'is', null);
+
+  if (serviceError) throw serviceError;
+
+  const ativos = (serviceRows || []).filter(
+    (item) => !isCancelledStatus(item.status),
+  );
+
+  const agendamentoIds = Array.from(
+    new Set(
+      ativos
+        .map((item) => safeString(item.agendamento_id))
+        .filter(Boolean),
+    ),
+  );
+
+  if (agendamentoIds.length === 0) {
+    return { profissional, agendamentos: [] };
+  }
+
+  const { data: appointments, error: appointmentsError } = await supabase
+    .from('sae_agendamentos')
+    .select(
+      'id,data,tipo_usuario,usuario_id,prontuario_informado,nome_avulso,tipo_atendimento,status,observacao',
+    )
+    .in('id', agendamentoIds)
+    .gte('data', hoje);
+
+  if (appointmentsError) throw appointmentsError;
+
+  const validAppointments = (appointments || []).filter(
+    (item) => !isCancelledStatus(item.status),
+  );
+
+  const appointmentMap = new Map(
+    validAppointments.map((item) => [safeString(item.id), item]),
+  );
+
+  const usuarioIds = Array.from(
+    new Set(
+      validAppointments
+        .map((item) => safeString(item.usuario_id))
+        .filter(Boolean),
+    ),
+  );
+
+  let usuariosMap = new Map();
+
+  if (usuarioIds.length > 0) {
+    const { data: usuarios, error: usuariosError } = await supabase
+      .from('sae_usuarios_resumo')
+      .select('id,prontuario,nome')
+      .in('id', usuarioIds);
+
+    if (usuariosError) throw usuariosError;
+
+    usuariosMap = new Map(
+      (usuarios || []).map((item) => [safeString(item.id), item]),
+    );
+  }
+
+  const servicoIds = Array.from(
+    new Set(
+      ativos
+        .map((item) => safeString(item.servico_id))
+        .filter(Boolean),
+    ),
+  );
+
+  let servicosMap = new Map();
+
+  if (servicoIds.length > 0) {
+    const { data: servicos, error: servicosError } = await supabase
+      .from('sae_servicos')
+      .select('id,nome,sigla')
+      .in('id', servicoIds);
+
+    if (servicosError) throw servicosError;
+
+    servicosMap = new Map(
+      (servicos || []).map((item) => [safeString(item.id), item]),
+    );
+  }
+
+  const agendamentos = [];
+
+  for (const row of ativos) {
+    const agendamento = appointmentMap.get(safeString(row.agendamento_id));
+
+    if (!agendamento) continue;
+
+    const usuario = usuariosMap.get(safeString(agendamento.usuario_id));
+    const servico = servicosMap.get(safeString(row.servico_id));
+
+    agendamentos.push({
+      agendamentoId: safeString(agendamento.id),
+      agendamentoServicoId: safeString(row.id),
+      data: safeString(agendamento.data) || null,
+      horaInicio: safeString(row.hora_inicio) || null,
+      horaFim: safeString(row.hora_fim) || null,
+      turno: safeString(row.turno) || null,
+      status: safeString(agendamento.status),
+      statusServico: safeString(row.status),
+      tipoUsuario: safeString(agendamento.tipo_usuario),
+      tipoAtendimento: safeString(agendamento.tipo_atendimento) || null,
+      usuarioId: safeString(agendamento.usuario_id) || null,
+      prontuario:
+        safeString(usuario?.prontuario) ||
+        safeString(agendamento.prontuario_informado) ||
+        null,
+      nomePaciente:
+        safeString(usuario?.nome) ||
+        safeString(agendamento.nome_avulso) ||
+        'Usuário não identificado',
+      servicoId: safeString(row.servico_id) || null,
+      servicoNome: safeString(servico?.nome) || 'Serviço não informado',
+      servicoSigla: safeString(servico?.sigla) || null,
+      observacao:
+        safeString(row.observacao) ||
+        safeString(agendamento.observacao) ||
+        null,
+    });
+  }
+
+  agendamentos.sort((a, b) => {
+    const dataCompare = safeString(a.data).localeCompare(safeString(b.data));
+    if (dataCompare !== 0) return dataCompare;
+    return safeString(a.horaInicio).localeCompare(safeString(b.horaInicio));
+  });
+
+  return { profissional, agendamentos };
+}
+
+async function cancelarAgendamento({
+  supabase,
+  authUser,
+  actor,
+  auditLog,
+  agendamentoId,
+  payload,
+  req,
+}) {
+  const id = safeString(agendamentoId);
+  const motivo = safeString(payload?.motivo);
+
+  if (!id) {
+    throw createHttpError('Agendamento inválido.', 400);
+  }
+
+  if (!motivo) {
+    throw createHttpError('Informe o motivo do cancelamento.', 400);
+  }
+
+  const { data: atual, error: agendamentoError } = await supabase
+    .from('sae_agendamentos')
+    .select(
+      'id,data,tipo_usuario,usuario_id,prontuario_informado,nome_avulso,tipo_atendimento,status,observacao',
+    )
+    .eq('id', id)
+    .maybeSingle();
+
+  if (agendamentoError) throw agendamentoError;
+
+  if (!atual) {
+    throw createHttpError('Agendamento não encontrado.', 404);
+  }
+
+  const statusAtual = safeString(atual.status).toUpperCase();
+
+  if (isCancelledStatus(statusAtual)) {
+    throw createHttpError('Este agendamento já está cancelado.', 409);
+  }
+
+  if (statusAtual !== 'AGENDADO') {
+    throw createHttpError(
+      `Somente agendamentos com status AGENDADO podem ser cancelados por esta ação. Status atual: ${statusAtual || 'não informado'}.`,
+      409,
+    );
+  }
+
+  const agora = new Date().toISOString();
+
+  const { error: updateAppointmentError } = await supabase
+    .from('sae_agendamentos')
+    .update({
+      status: 'CANCELADO',
+      updated_at: agora,
+      updated_by: authUser?.id || null,
+    })
+    .eq('id', id)
+    .eq('status', atual.status);
+
+  if (updateAppointmentError) throw updateAppointmentError;
+
+  const { data: servicosAntes, error: servicesBeforeError } = await supabase
+    .from('sae_agendamento_servicos')
+    .select('id,status')
+    .eq('agendamento_id', id);
+
+  if (servicesBeforeError) throw servicesBeforeError;
+
+  const { error: updateServicesError } = await supabase
+    .from('sae_agendamento_servicos')
+    .update({
+      status: 'CANCELADO',
+      updated_at: agora,
+      updated_by: authUser?.id || null,
+    })
+    .eq('agendamento_id', id);
+
+  if (updateServicesError) {
+    await supabase
+      .from('sae_agendamentos')
+      .update({
+        status: atual.status,
+        updated_at: agora,
+        updated_by: authUser?.id || null,
+      })
+      .eq('id', id);
+
+    throw updateServicesError;
+  }
+
+  await auditLog(req, {
+    action: 'CANCEL_SAE_AGENDAMENTO',
+    module: MODULE_NAME,
+    entityType: 'sae_agendamento',
+    entityId: id,
+    entityLabel:
+      safeString(atual.nome_avulso) ||
+      safeString(atual.prontuario_informado) ||
+      'Agendamento SAE',
+    description: `Agendamento SAE cancelado por ${actor?.email || authUser?.email || 'usuário autenticado'}.`,
+    metadata: {
+      status_anterior: atual.status,
+      status_atual: 'CANCELADO',
+      motivo_cancelamento: motivo,
+      data: atual.data,
+      servicos_anteriores: servicosAntes || [],
+    },
+  });
+
+  return {
+    id,
+    status: 'CANCELADO',
+    motivo,
+  };
+}
+
+
 async function criarAgendamento({
   supabase,
   authUser,
@@ -584,5 +886,7 @@ module.exports = {
   listarCatalogo,
   buscarUsuarios,
   consultarDisponibilidade,
+  listarMeusAgendamentos,
   criarAgendamento,
+  cancelarAgendamento,
 };
