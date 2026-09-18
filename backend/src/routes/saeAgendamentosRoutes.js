@@ -101,6 +101,30 @@ router.get(
 );
 
 
+
+router.get(
+  '/disponibilidade-periodo',
+  requirePermission('sae_profissionais', 'visualizar'),
+  async (req, res, next) => {
+    try {
+      const response =
+        await saeAgendamentosService.consultarDisponibilidadePeriodo(
+          supabase,
+          {
+            profissionalId: req.query.profissionalId,
+            servicoId: req.query.servicoId,
+            inicio: req.query.inicio,
+            fim: req.query.fim,
+          },
+        );
+
+      return res.json(response);
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
 router.get('/minha-agenda', async (req, res, next) => {
   try {
     const response = await saeAgendamentosService.listarMeusAgendamentos(
