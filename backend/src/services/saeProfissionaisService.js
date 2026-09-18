@@ -373,6 +373,137 @@ async function updateProfissionalStatus({ supabase, authUser, actor, auditLog, p
   return profissional;
 }
 
+
+async function listarUsuariosSistema(supabase) {
+  const [usuariosResponse, profissionaisResponse] = await Promise.all([
+    supabase
+      .from('system_users')
+      .select('id,auth_user_id,nome_completo,email,perfil,status,setor_nome')
+      .not('auth_user_id', 'is', null)
+      .order('nome_completo', { ascending: true }),
+    supabase
+      .from('sae_profissionais')
+      .select('id,nome,auth_user_id')
+      .not('auth_user_id', 'is', null),
+  ]);
+
+  if (usuariosResponse.error) throw usuariosResponse.error;
+  if (profissionaisResponse.error) throw profissionaisResponse.error;
+
+  const vinculos = new Map(
+    (profissionaisResponse.data || [])
+      .filter((item) => safeString(item.auth_user_id))
+      .map((item) => [
+        safeString(item.auth_user_id),
+        {
+          profissionalId: safeString(item.id),
+          profissionalNome: safeString(item.nome),
+        },
+      ]),
+  );
+
+  return (usuariosResponse.data || []).map((row) => {
+    const authUserId = safeString(row.auth_user_id);
+    const vinculo = vinculos.get(authUserId);
+
+    return {
+      id: safeString(row.id),
+      authUserId,
+      nomeCompleto: safeString(row.nome_completo),
+      email: safeString(row.email),
+      perfil: safeString(row.perfil) || null,
+      status: safeString(row.status) || null,
+      setorNome: safeString(row.setor_nome) || null,
+      vinculadoProfissionalId: vinculo?.profissionalId || null,
+      vinculadoProfissionalNome: vinculo?.profissionalNome || null,
+    };
+  });
+}
+
+async function vincularUsuarioSistema({
+  supabase,
+  authUser,
+  actor,
+  auditLog,
+  profissionalId,
+  authUserId,
+  req,
+}) {
+  const atual = await obterProfissionalPorId(supabase, profissionalId);
+  const nextAuthUserId = safeString(authUserId) || null;
+
+  let usuarioSistema = null;
+
+  if (nextAuthUserId) {
+    const { data: usuario, error: usuarioError } = await supabase
+      .from('system_users')
+      .select('id,auth_user_id,nome_completo,email,status')
+      .eq('auth_user_id', nextAuthUserId)
+      .maybeSingle();
+
+    if (usuarioError) throw usuarioError;
+
+    if (!usuario) {
+      throw createHttpError(
+        'A conta selecionada não foi encontrada entre os usuários do sistema.',
+        404,
+      );
+    }
+
+    const { data: conflito, error: conflitoError } = await supabase
+      .from('sae_profissionais')
+      .select('id,nome')
+      .eq('auth_user_id', nextAuthUserId)
+      .neq('id', atual.id)
+      .maybeSingle();
+
+    if (conflitoError) throw conflitoError;
+
+    if (conflito) {
+      throw createHttpError(
+        `Esta conta já está vinculada ao profissional ${safeString(conflito.nome) || 'informado'}.`,
+        409,
+      );
+    }
+
+    usuarioSistema = usuario;
+  }
+
+  const { error } = await supabase
+    .from('sae_profissionais')
+    .update({
+      auth_user_id: nextAuthUserId,
+      updated_at: new Date().toISOString(),
+      updated_by: authUser?.id || null,
+    })
+    .eq('id', atual.id);
+
+  if (error) throw error;
+
+  const profissional = await obterProfissionalPorId(supabase, atual.id);
+
+  await auditLog(req, {
+    action: nextAuthUserId
+      ? 'LINK_SAE_PROFISSIONAL_SYSTEM_USER'
+      : 'UNLINK_SAE_PROFISSIONAL_SYSTEM_USER',
+    module: MODULE_NAME,
+    entityType: 'sae_profissional',
+    entityId: profissional.id,
+    entityLabel: profissional.nome,
+    description: nextAuthUserId
+      ? `Conta ${safeString(usuarioSistema?.email) || nextAuthUserId} vinculada ao profissional ${profissional.nome} por ${actor?.email || authUser?.email || 'usuário autenticado'}.`
+      : `Conta do sistema desvinculada do profissional ${profissional.nome} por ${actor?.email || authUser?.email || 'usuário autenticado'}.`,
+    metadata: {
+      auth_user_id_anterior: atual.authUserId || null,
+      auth_user_id_atual: profissional.authUserId || null,
+      system_user_id: safeString(usuarioSistema?.id) || null,
+      system_user_email: safeString(usuarioSistema?.email) || null,
+    },
+  });
+
+  return profissional;
+}
+
 async function countReferences(supabase, tableName, profissionalId) {
   const { count, error } = await supabase
     .from(tableName)
@@ -427,5 +558,7 @@ module.exports = {
   createProfissional,
   updateProfissional,
   updateProfissionalStatus,
+  listarUsuariosSistema,
+  vincularUsuarioSistema,
   deleteProfissional,
 };
