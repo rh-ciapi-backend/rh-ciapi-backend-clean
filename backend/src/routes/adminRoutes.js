@@ -40,6 +40,11 @@ async function authenticate(req, res, next) {
 
 router.use(authenticate);
 
+router.get('/me', (req, res) => {
+  const { id, perfil, status, is_master: isMaster } = req.currentUser;
+  res.json({ user: { id, perfil, status, is_master: isMaster } });
+});
+
 router.get('/users', requirePermission('administracao', 'visualizar'), async (req, res, next) => {
   try {
     const response = await adminUsersService.listUsers(supabase, {
