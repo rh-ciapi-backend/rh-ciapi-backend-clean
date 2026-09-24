@@ -1,4 +1,4 @@
-const { MASTER_EMAIL } = require('../config/accessControl');
+const { MASTER_EMAIL, PROFILES } = require('../config/accessControl');
 
 function requirePermission(moduleName, actionName = 'visualizar') {
   return async (req, res, next) => {
@@ -15,6 +15,11 @@ function requirePermission(moduleName, actionName = 'visualizar') {
 
       if (currentUser.status && currentUser.status !== 'ATIVO') {
         return res.status(403).json({ error: 'Usuário sem acesso ativo.' });
+      }
+
+      if (currentUser.perfil === PROFILES.SERVIDOR_LIMITADO &&
+          (moduleName !== 'requerimentos' || !['visualizar', 'criar'].includes(actionName))) {
+        return res.status(403).json({ error: 'Este perfil acessa apenas seus requerimentos.' });
       }
 
       const permissions = currentUser.permissions || [];
