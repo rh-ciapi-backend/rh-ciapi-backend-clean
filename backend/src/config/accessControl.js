@@ -12,6 +12,7 @@ const PROFILES = {
 const PERMISSION_MODULES = [
   'dashboard',
   'servidores',
+  'requerimentos',
   'frequencia',
   'ferias',
   'escala',
@@ -44,6 +45,7 @@ const defaultPermissionsByProfile = {
   ADMINISTRADOR: {
     dashboard: ['visualizar'],
     servidores: ['visualizar', 'criar', 'editar', 'exportar'],
+    requerimentos: ['visualizar', 'criar', 'editar', 'exportar', 'aprovar'],
     frequencia: ['visualizar', 'criar', 'editar', 'exportar', 'aprovar'],
     ferias: ['visualizar', 'criar', 'editar', 'exportar', 'aprovar'],
     escala: ['visualizar', 'criar', 'editar', 'exportar'],
@@ -57,12 +59,13 @@ const defaultPermissionsByProfile = {
   RH: {
     dashboard: ['visualizar'],
     servidores: ['visualizar', 'criar', 'editar', 'exportar'],
+    requerimentos: ['visualizar', 'criar', 'editar', 'exportar', 'aprovar'],
     frequencia: ['visualizar', 'criar', 'editar', 'exportar'],
     ferias: ['visualizar', 'criar', 'editar', 'exportar', 'aprovar'],
     escala: ['visualizar', 'editar'],
     mapas: ['visualizar', 'exportar'],
     atestados: ['visualizar', 'criar', 'editar', 'aprovar'],
-    eventos: ['visualizar'],
+    eventos: ['visualizar', 'criar', 'editar'],
     administracao: ['visualizar'],
     relatorios: ['visualizar', 'exportar'],
     exportacoes: ['visualizar', 'exportar'],
@@ -70,6 +73,7 @@ const defaultPermissionsByProfile = {
   GESTOR: {
     dashboard: ['visualizar'],
     servidores: ['visualizar'],
+    requerimentos: ['visualizar', 'aprovar'],
     frequencia: ['visualizar', 'aprovar'],
     ferias: ['visualizar', 'aprovar'],
     escala: ['visualizar', 'editar'],
@@ -94,17 +98,7 @@ const defaultPermissionsByProfile = {
     exportacoes: [],
   },
   SERVIDOR_LIMITADO: {
-    dashboard: ['visualizar'],
-    servidores: [],
-    frequencia: ['visualizar'],
-    ferias: ['visualizar'],
-    escala: ['visualizar'],
-    mapas: [],
-    atestados: ['visualizar'],
-    eventos: ['visualizar'],
-    administracao: [],
-    relatorios: [],
-    exportacoes: [],
+    requerimentos: ['visualizar', 'criar'],
   },
 };
 
@@ -131,6 +125,13 @@ function normalizePermissions(permissions = [], profile = PROFILES.CONSULTA) {
     const allowedActions = Array.from(
       new Set((current.actions || []).filter((action) => PERMISSION_ACTIONS.includes(action))),
     );
+
+    if (profile === PROFILES.SERVIDOR_LIMITADO) {
+      const actions = moduleName === 'requerimentos'
+        ? allowedActions.filter((action) => ['visualizar', 'criar'].includes(action))
+        : [];
+      return { module: moduleName, allowed: actions.length > 0, actions };
+    }
 
     return {
       module: moduleName,
