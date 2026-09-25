@@ -3,6 +3,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { requirePermission } = require('../middleware/requirePermission');
 const { createAuditLogger } = require('../middleware/auditLogger');
 const adminUsersService = require('../services/adminUsersService');
+const requerimentosService = require('../services/requerimentosService');
 
 const router = express.Router();
 
@@ -45,6 +46,70 @@ router.get('/me', (req, res) => {
   res.json({ user: { id, perfil, status, is_master: isMaster } });
 });
 
+function acessoRequerimentos(acao) {
+  return (req, res, next) => {
+    const usuario = req.currentUser;
+
+    if (!usuario || (!usuario.id && !usuario.is_master)) {
+      return res.status(403).json({ error: 'Usuário sem cadastro ativo no sistema.' });
+    }
+    if (!usuario.is_master && usuario.status !== 'ATIVO') {
+      return res.status(403).json({ error: 'Usuário sem acesso ativo.' });
+    }
+    if (usuario.is_master) return next();
+
+    const perfis = acao === 'criar'
+      ? ['ADMINISTRADOR', 'RH', 'SERVIDOR_LIMITADO']
+      : ['ADMINISTRADOR', 'RH', 'GESTOR', 'CONSULTA', 'SERVIDOR_LIMITADO'];
+
+    if (!perfis.includes(usuario.perfil)) {
+      return res.status(403).json({ error: 'Acesso negado aos requerimentos.' });
+    }
+    return next();
+  };
+}
+
+router.get('/requerimentos', acessoRequerimentos('visualizar'), async (req, res, next) => {
+  try {
+    const requerimentos = await requerimentosService.listar({
+      supabase,
+      authUser: req.authUser,
+      currentUser: req.currentUser,
+    });
+    res.json({ requerimentos });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/requerimentos/formulario', acessoRequerimentos('visualizar'), async (req, res, next) => {
+  try {
+    const formulario = await requerimentosService.obterFormulario({
+      supabase,
+      authUser: req.authUser,
+      currentUser: req.currentUser,
+      servidorId: req.query.servidorId,
+    });
+    res.json(formulario);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/requerimentos', acessoRequerimentos('criar'), async (req, res, next) => {
+  try {
+    const requerimento = await requerimentosService.criar({
+      supabase,
+      authUser: req.authUser,
+      currentUser: req.currentUser,
+      payload: req.body,
+    });
+    res.status(201).json({ requerimento });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/users', requirePermission('administracao', 'visualizar'), async (req, res, next) => {
   try {
     const response = await adminUsersService.listUsers(supabase, {
@@ -53,7 +118,6 @@ router.get('/users', requirePermission('administracao', 'visualizar'), async (re
       setorNome: req.query.setorNome,
       status: req.query.status,
     });
-
     res.json(response);
   } catch (error) {
     next(error);
@@ -78,7 +142,6 @@ router.post('/users', requirePermission('administracao', 'gerenciar_usuarios'), 
       payload: req.body,
       req,
     });
-
     res.status(201).json({ ok: true, user });
   } catch (error) {
     next(error);
@@ -95,7 +158,6 @@ router.put('/users/:id', requirePermission('administracao', 'gerenciar_usuarios'
       userId: req.params.id,
       req,
     });
-
     res.json({ ok: true, user });
   } catch (error) {
     next(error);
@@ -115,7 +177,6 @@ router.patch(
         status: req.body.status,
         req,
       });
-
       res.json({ ok: true, user });
     } catch (error) {
       next(error);
@@ -132,7 +193,6 @@ router.delete('/users/:id', requirePermission('administracao', 'gerenciar_usuari
       userId: req.params.id,
       req,
     });
-
     res.json(response);
   } catch (error) {
     next(error);
@@ -152,7 +212,6 @@ router.post(
         auditLog,
         req,
       });
-
       res.json(response);
     } catch (error) {
       next(error);
@@ -168,7 +227,6 @@ router.get('/logs', requirePermission('administracao', 'visualizar'), async (req
       action: req.query.action,
       limit: req.query.limit,
     });
-
     res.json(response);
   } catch (error) {
     next(error);
@@ -177,7 +235,6 @@ router.get('/logs', requirePermission('administracao', 'visualizar'), async (req
 
 router.use((error, req, res, next) => {
   console.error('[adminRoutes]', error);
-
   res.status(error.statusCode || 500).json({
     error: error.message || 'Erro interno no módulo de administração.',
   });
