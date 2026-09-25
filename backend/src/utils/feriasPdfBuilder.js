@@ -85,12 +85,12 @@ function drawPage(doc, rows, filters, pageNumber, totalPages, totalRows) {
     59,
     { width, align: "center" }
   );
-  doc.fontSize(11).text(
-    `PROGRAMAÇÃO ANUAL DE FÉRIAS - EXERCÍCIO/${valueOf(filters.ano)}`,
-    left,
-    77,
-    { width, align: "center" }
-  );
+  doc.font("Helvetica-Bold").fontSize(10).text(
+  `PROGRAMAÇÃO ANUAL DE FÉRIAS - EXERCÍCIO/${valueOf(filters.ano)}`,
+  left,
+  78,
+  { width, height: 14, align: "center", lineBreak: false }
+);
 
   doc.font("Helvetica").fontSize(7.5).text(
     `Categoria: ${valueOf(filters.categoria)}    ` +
