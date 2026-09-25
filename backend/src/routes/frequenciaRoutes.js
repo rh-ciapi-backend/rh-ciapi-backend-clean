@@ -1,5 +1,6 @@
 const express = require("express");
-const router = express.Router();
+const adminUsersService = require("../services/adminUsersService");
+const { requirePermission } = require("../middleware/requirePermission");
 
 const {
   listarFrequenciaMensal,
@@ -8,7 +9,55 @@ const {
   excluirOcorrenciaFrequencia,
 } = require("../services/frequenciaService");
 
-router.get("/", async (req, res) => {
+const router = express.Router();
+
+router.use(async (req, res, next) => {
+  try {
+    const token = String(req.headers.authorization || "")
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+
+    if (!token) {
+      return res.status(401).json({ error: "Token ausente." });
+    }
+
+    const supabase = req.app.locals.supabase;
+    const { data, error } = await supabase.auth.getUser(token);
+
+    if (error || !data?.user) {
+      return res.status(401).json({ error: "Token inválido." });
+    }
+
+    const currentUser = await adminUsersService.getCurrentActor(
+      supabase,
+      data.user
+    );
+
+    const perfisAutorizados = [
+      "MASTER",
+      "ADMINISTRADOR",
+      "RH",
+      "GESTOR",
+      "CONSULTA",
+    ];
+
+    if (
+      (!currentUser.id && !currentUser.is_master) ||
+      (!currentUser.is_master && currentUser.status !== "ATIVO") ||
+      !perfisAutorizados.includes(currentUser.perfil)
+    ) {
+      return res.status(403).json({ error: "Acesso negado à frequência." });
+    }
+
+    req.authUser = data.user;
+    req.currentUser = currentUser;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/", requirePermission("frequencia", "visualizar"), async (req, res) => {
   try {
     const ano = Number(req.query.ano);
     const mes = Number(req.query.mes);
@@ -34,7 +83,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requirePermission("frequencia", "criar"), async (req, res) => {
   try {
     const result = await registrarOcorrenciaFrequencia({
       supabase: req.app.locals.supabase,
@@ -51,7 +100,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.put("/:id", async (req, res) => {
+router.put("/:id", requirePermission("frequencia", "editar"), async (req, res) => {
   try {
     const result = await editarOcorrenciaFrequencia({
       supabase: req.app.locals.supabase,
@@ -69,7 +118,7 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requirePermission("frequencia", "editar"), async (req, res) => {
   try {
     const result = await excluirOcorrenciaFrequencia({
       supabase: req.app.locals.supabase,
