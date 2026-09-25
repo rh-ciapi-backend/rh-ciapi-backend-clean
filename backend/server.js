@@ -4,6 +4,7 @@ const dotenv = require("dotenv");
 const path = require("path");
 const fs = require("fs");
 const { createClient } = require("@supabase/supabase-js");
+const adminUsersService = require("./src/services/adminUsersService");
 
 dotenv.config();
 
@@ -178,8 +179,40 @@ app.get("/health", (_req, res) => {
   });
 });
 
-app.get("/api/servidores", async (_req, res) => {
+app.get("/api/servidores", async (req, res) => {
   try {
+    const token = String(req.headers.authorization || "")
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+
+    if (!token) {
+      return res.status(401).json({ ok: false, error: "Token ausente." });
+    }
+
+    const { data: auth, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !auth?.user) {
+      return res.status(401).json({ ok: false, error: "Token inválido." });
+    }
+
+    const actor = await adminUsersService.getCurrentActor(supabase, auth.user);
+    const perfisAutorizados = [
+      "MASTER",
+      "ADMINISTRADOR",
+      "RH",
+      "GESTOR",
+      "CONSULTA",
+    ];
+
+    if (
+      (!actor.id && !actor.is_master) ||
+      (!actor.is_master && actor.status !== "ATIVO") ||
+      !perfisAutorizados.includes(actor.perfil)
+    ) {
+      return res
+        .status(403)
+        .json({ ok: false, error: "Acesso negado aos servidores." });
+    }
+
     const { data, error } = await supabase
       .from("servidores")
       .select("*")
