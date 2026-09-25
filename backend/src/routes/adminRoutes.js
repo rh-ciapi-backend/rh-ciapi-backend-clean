@@ -96,6 +96,31 @@ router.get('/requerimentos/formulario', acessoRequerimentos('visualizar'), async
   }
 });
 
+router.get('/requerimentos/:id/docx', acessoRequerimentos('visualizar'), async (req, res, next) => {
+  try {
+    const requerimento = await requerimentosService.obterParaExportacao({
+      supabase,
+      authUser: req.authUser,
+      currentUser: req.currentUser,
+      id: req.params.id,
+    });
+
+    const arquivo = gerarRequerimentoDocx(requerimento);
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="requerimento_${requerimento.id}.docx"`
+    );
+    res.send(arquivo);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/requerimentos', acessoRequerimentos('criar'), async (req, res, next) => {
   try {
     const requerimento = await requerimentosService.criar({
