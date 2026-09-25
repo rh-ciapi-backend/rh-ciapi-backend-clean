@@ -23,7 +23,6 @@ function filtrarCampos(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw erro('Dados do formulário inválidos.');
   }
-
   const result = {};
   for (const [key, value] of Object.entries(input)) {
     if (CAMPOS.has(key)) result[key] = texto(value, 500);
@@ -51,6 +50,50 @@ async function idDoServidor(supabase, authUser, currentUser, solicitado) {
   return data.servidor_id;
 }
 
+async function buscarServidor(supabase, referencia) {
+  const id = texto(referencia, 100);
+  if (!id) throw erro('Selecione um servidor.');
+
+  const { data: amostra, error: erroAmostra } = await supabase
+    .from('servidores').select('*').limit(1);
+
+  if (erroAmostra) throw erroAmostra;
+  if (!amostra?.length) throw erro('Servidor não encontrado.', 404);
+
+  const colunas = new Set(Object.keys(amostra[0]));
+  const cpf = id.replace(/\D/g, '');
+  const cpfFormatado = cpf.length === 11
+    ? cpf.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4')
+    : '';
+
+  const candidatos = [
+    ['servidor', id],
+    ['id', id],
+    ['servidor_id', id],
+    ['uuid', id],
+    ...(cpf.length === 11 ? [['cpf', cpf], ['cpf', cpfFormatado]] : []),
+    ['matricula', id],
+    ['nome_completo', id],
+  ];
+
+  for (const [coluna, valor] of candidatos) {
+    if (!colunas.has(coluna)) continue;
+
+    const { data, error } = await supabase
+      .from('servidores')
+      .select('*')
+      .eq(coluna, valor)
+      .limit(1)
+      .maybeSingle();
+
+    if (error?.code === '22P02') continue;
+    if (error) throw error;
+    if (data) return data;
+  }
+
+  throw erro('Servidor não encontrado.', 404);
+}
+
 async function listar({ supabase, authUser, currentUser }) {
   let query = supabase
     .from('rh_requerimentos')
@@ -70,15 +113,7 @@ async function listar({ supabase, authUser, currentUser }) {
 
 async function obterFormulario({ supabase, authUser, currentUser, servidorId }) {
   const id = await idDoServidor(supabase, authUser, currentUser, servidorId);
-
-  const { data: servidor, error: erroServidor } = await supabase
-    .from('servidores')
-    .select('*')
-    .eq('id', id)
-    .maybeSingle();
-
-  if (erroServidor) throw erroServidor;
-  if (!servidor) throw erro('Servidor não encontrado.', 404);
+  const servidor = await buscarServidor(supabase, id);
 
   const { data: complemento, error: erroComplemento } = await supabase
     .from('rh_servidor_complementos')
@@ -87,16 +122,12 @@ async function obterFormulario({ supabase, authUser, currentUser, servidorId }) 
     .maybeSingle();
 
   if (erroComplemento) throw erroComplemento;
-
   return { servidor, complemento: complemento?.dados || {} };
 }
 
 async function criar({ supabase, authUser, currentUser, payload }) {
   const id = await idDoServidor(
-    supabase,
-    authUser,
-    currentUser,
-    payload?.servidorId
+    supabase, authUser, currentUser, payload?.servidorId
   );
   const tipo = texto(payload?.tipo, 180);
   const detalhes = texto(payload?.detalhes, 5000);
@@ -104,14 +135,7 @@ async function criar({ supabase, authUser, currentUser, payload }) {
   if (!tipo) throw erro('Selecione o tipo de requerimento.');
   const dados = filtrarCampos(payload?.dados);
 
-  const { data: servidor, error: erroServidor } = await supabase
-    .from('servidores')
-    .select('id')
-    .eq('id', id)
-    .maybeSingle();
-
-  if (erroServidor) throw erroServidor;
-  if (!servidor) throw erro('Servidor não encontrado.', 404);
+  await buscarServidor(supabase, id);
 
   const { error: erroComplemento } = await supabase
     .from('rh_servidor_complementos')
