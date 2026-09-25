@@ -695,6 +695,51 @@ if (normalizeText(filters.formato) === "DOCX") {
   };
 }
 
+  if (normalizeText(filters.formato) === "CSV") {
+  const csvCell = (value) => {
+    let text = String(value ?? "");
+
+    // Evita que valores de cadastro sejam interpretados como fórmulas.
+    if (/^\s*[=+\-@]/.test(text)) text = `'${text}`;
+
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+
+  const columns = [
+    ["Nº", "ordem"],
+    ["Nome", "nome"],
+    ["Matrícula", "matricula"],
+    ["CPF", "cpf"],
+    ["Categoria", "categoria"],
+    ["Setor", "setor"],
+    ["Status", "status"],
+    ["Exercício", "exercicio"],
+    ["1º período início", "periodo1_inicio"],
+    ["1º período término", "periodo1_fim"],
+    ["2º período início", "periodo2_inicio"],
+    ["2º período término", "periodo2_fim"],
+    ["3º período início", "periodo3_inicio"],
+    ["3º período término", "periodo3_fim"],
+  ];
+
+  const lines = [
+    columns.map(([title]) => csvCell(title)).join(";"),
+    ...filteredRows.map((row) =>
+      columns.map(([, key]) => csvCell(row[key])).join(";")
+    ),
+  ];
+
+  return {
+    buffer: Buffer.from("\uFEFF" + lines.join("\r\n"), "utf8"),
+    fileName: `ferias_${filters.ano}.csv`,
+    contentType: "text/csv; charset=utf-8",
+    meta: {
+      totalRegistros: filteredRows.length,
+      filtros: filters,
+    },
+  };
+}
+
 const html = buildHtmlDocument(filteredRows, filters);
 
   const categoriaSlug =
