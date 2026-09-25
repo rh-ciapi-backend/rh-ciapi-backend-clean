@@ -4,7 +4,7 @@ const PAGE_SIZE = 15;
 const COLUMNS = [
   { title: "Nº", key: "ordem", width: 24 },
   { title: "NOME DO SERVIDOR", key: "nome", width: 188 },
-  { title: "MATRÍCULA", key: "matricula", width: 70 },
+  { title: "MATRÍCULA", key: "matricula", width: 96 },
   { title: "EXERCÍCIO", key: "exercicio", width: 48 },
   { title: "1º INÍCIO", key: "periodo1_inicio", width: 54 },
   { title: "1º FIM", key: "periodo1_fim", width: 54 },
@@ -12,7 +12,7 @@ const COLUMNS = [
   { title: "2º FIM", key: "periodo2_fim", width: 54 },
   { title: "3º INÍCIO", key: "periodo3_inicio", width: 54 },
   { title: "3º FIM", key: "periodo3_fim", width: 54 },
-  { title: "ASSINATURA", key: "assinatura", width: 120 },
+  { title: "ASSINATURA", key: "assinatura", width: 94 },
 ];
 
 function valueOf(value) {
