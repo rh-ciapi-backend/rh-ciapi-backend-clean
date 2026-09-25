@@ -171,4 +171,21 @@ async function criar({ supabase, authUser, currentUser, payload }) {
   return requerimento;
 }
 
-module.exports = { listar, obterFormulario, criar };
+async function obterParaExportacao({ supabase, authUser, currentUser, id }) {
+  let query = supabase
+    .from('rh_requerimentos')
+    .select('id,servidor_id,tipo,detalhes,dados_snapshot,criado_em')
+    .eq('id', texto(id, 100));
+
+  if (currentUser.perfil === PERFIL_SERVIDOR) {
+    const servidorId = await idDoServidor(supabase, authUser, currentUser);
+    query = query.eq('servidor_id', servidorId);
+  }
+
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  if (!data) throw erro('Requerimento não encontrado.', 404);
+  return data;
+}
+
+module.exports = { listar, obterFormulario, criar, obterParaExportacao };
