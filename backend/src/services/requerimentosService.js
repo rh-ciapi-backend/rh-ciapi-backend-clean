@@ -97,7 +97,7 @@ async function buscarServidor(supabase, referencia) {
 async function listar({ supabase, authUser, currentUser }) {
   let query = supabase
     .from('rh_requerimentos')
-    .select('id,servidor_id,tipo,detalhes,status,criado_em,atualizado_em')
+    .select('id,servidor_id,tipo,detalhes,status,criado_em,atualizado_em,dados_snapshot')
     .order('criado_em', { ascending: false })
     .limit(100);
 
@@ -108,7 +108,11 @@ async function listar({ supabase, authUser, currentUser }) {
 
   const { data, error } = await query;
   if (error) throw error;
-  return data || [];
+
+  return (data || []).map(({ dados_snapshot, ...item }) => ({
+    ...item,
+    servidor_nome: texto(dados_snapshot?.nome) || item.servidor_id,
+  }));
 }
 
 async function obterFormulario({ supabase, authUser, currentUser, servidorId }) {
