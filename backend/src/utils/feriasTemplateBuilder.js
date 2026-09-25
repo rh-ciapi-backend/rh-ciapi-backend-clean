@@ -740,6 +740,20 @@ if (normalizeText(filters.formato) === "DOCX") {
   };
 }
 
+if (normalizeText(filters.formato) === "PDF") {
+  const { buildFeriasPdf } = require("./feriasPdfBuilder");
+
+  return {
+    buffer: await buildFeriasPdf(filteredRows, filters),
+    fileName: `ferias_${filters.ano}.pdf`,
+    contentType: "application/pdf",
+    meta: {
+      totalRegistros: filteredRows.length,
+      filtros: filters,
+    },
+  };
+}  
+
 const html = buildHtmlDocument(filteredRows, filters);
 
   const categoriaSlug =
