@@ -95,8 +95,8 @@ function safeRequire(modulePath, label) {
     return loaded;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[BOOT] ${label} não carregado: ${modulePath}`);
-    console.warn(`[BOOT] Motivo: ${message}`);
+    console.log(`[BOOT] ${label} não carregado: ${modulePath}`);
+    console.log(`[BOOT] Motivo: ${message}`);
     return null;
   }
 }
