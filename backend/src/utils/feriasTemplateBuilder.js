@@ -678,8 +678,24 @@ async function exportarFeriasTemplate(payload = {}) {
     mergedRows.push(buildMergedRow(null, feriasRow, filters));
   }
 
-  const filteredRows = applyFilters(mergedRows, filters);
-  const html = buildHtmlDocument(filteredRows, filters);
+ const filteredRows = applyFilters(mergedRows, filters);
+
+if (normalizeText(filters.formato) === "DOCX") {
+  const { buildFeriasDocx } = require("./feriasDocxBuilder");
+
+  return {
+    buffer: buildFeriasDocx(filteredRows, filters),
+    fileName: `ferias_${filters.ano}.docx`,
+    contentType:
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    meta: {
+      totalRegistros: filteredRows.length,
+      filtros: filters,
+    },
+  };
+}
+
+const html = buildHtmlDocument(filteredRows, filters);
 
   const categoriaSlug =
     normalizeText(filters.categoria)
