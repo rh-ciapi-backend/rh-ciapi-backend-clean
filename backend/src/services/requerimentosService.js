@@ -25,7 +25,10 @@ function filtrarCampos(input) {
   }
   const result = {};
   for (const [key, value] of Object.entries(input)) {
-    if (CAMPOS.has(key)) result[key] = texto(value, 500);
+    if (CAMPOS.has(key)) {
+      const conteudo = texto(value, 500);
+      result[key] = key.startsWith('data') ? conteudo : conteudo.toLocaleUpperCase('pt-BR');
+    }
   }
   return result;
 }
