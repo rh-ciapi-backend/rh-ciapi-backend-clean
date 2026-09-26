@@ -97,7 +97,7 @@ async function buscarServidor(supabase, referencia) {
 async function listar({ supabase, authUser, currentUser }) {
   let query = supabase
     .from('rh_requerimentos')
-    .select('id,servidor_id,tipo,detalhes,status,criado_em,atualizado_em,dados_snapshot')
+    .select('id,servidor_id,tipo,detalhes,status,criado_em,atualizado_em')
     .order('criado_em', { ascending: false })
     .limit(100);
 
@@ -108,11 +108,7 @@ async function listar({ supabase, authUser, currentUser }) {
 
   const { data, error } = await query;
   if (error) throw error;
-
-  return (data || []).map(({ dados_snapshot, ...item }) => ({
-    ...item,
-    servidor_nome: texto(dados_snapshot?.nome) || item.servidor_id,
-  }));
+  return data || [];
 }
 
 async function obterFormulario({ supabase, authUser, currentUser, servidorId }) {
@@ -171,11 +167,14 @@ async function criar({ supabase, authUser, currentUser, payload }) {
   return requerimento;
 }
 
-async function obterParaExportacao({ supabase, authUser, currentUser, id }) {
+async function obterParaExportacao({ supabase, authUser, currentUser, requerimentoId }) {
+  const id = texto(requerimentoId, 100);
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw erro('Requerimento não encontrado.', 404);
+
   let query = supabase
     .from('rh_requerimentos')
     .select('id,servidor_id,tipo,detalhes,dados_snapshot,criado_em')
-    .eq('id', texto(id, 100));
+    .eq('id', id);
 
   if (currentUser.perfil === PERFIL_SERVIDOR) {
     const servidorId = await idDoServidor(supabase, authUser, currentUser);
