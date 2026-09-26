@@ -121,7 +121,7 @@ function gerarRequerimentoDocx(requerimento) {
   });
   for (const [marcadorCampo, nomeCampo] of Object.entries(CAMPOS)) {
     valores[marcadorCampo] = nomeCampo.startsWith('data')
-      ? dataBR(dados[nomeCampo]) : dados[nomeCampo] || '';
+      ? dataBR(dados[nomeCampo]) : String(dados[nomeCampo] || '').toLocaleUpperCase('pt-BR');
   }
   for (const [chave, valor] of Object.entries(valores)) {
     const token = `{{${chave}}}`;
