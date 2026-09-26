@@ -4,7 +4,7 @@ const { requirePermission } = require('../middleware/requirePermission');
 const { createAuditLogger } = require('../middleware/auditLogger');
 const adminUsersService = require('../services/adminUsersService');
 const requerimentosService = require('../services/requerimentosService');
-const { gerarRequerimentoDocx } = require('../services/requerimentosDocxService');
+const { gerarRequerimentoDocx, gerarRequerimentoPdf } = require('../services/requerimentosDocxService');
 
 const router = express.Router();
 
@@ -97,31 +97,6 @@ router.get('/requerimentos/formulario', acessoRequerimentos('visualizar'), async
   }
 });
 
-router.get('/requerimentos/:id/docx', acessoRequerimentos('visualizar'), async (req, res, next) => {
-  try {
-    const requerimento = await requerimentosService.obterParaExportacao({
-      supabase,
-      authUser: req.authUser,
-      currentUser: req.currentUser,
-      id: req.params.id,
-    });
-
-    const arquivo = gerarRequerimentoDocx(requerimento);
-
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    );
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="requerimento_${requerimento.id}.docx"`
-    );
-    res.send(arquivo);
-  } catch (error) {
-    next(error);
-  }
-});
-
 router.post('/requerimentos', acessoRequerimentos('criar'), async (req, res, next) => {
   try {
     const requerimento = await requerimentosService.criar({
@@ -131,6 +106,36 @@ router.post('/requerimentos', acessoRequerimentos('criar'), async (req, res, nex
       payload: req.body,
     });
     res.status(201).json({ requerimento });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/requerimentos/:id/docx', acessoRequerimentos('visualizar'), async (req, res, next) => {
+  try {
+    const requerimento = await requerimentosService.obterParaExportacao({
+      supabase, authUser: req.authUser, currentUser: req.currentUser,
+      requerimentoId: req.params.id,
+    });
+    const arquivo = gerarRequerimentoDocx(requerimento);
+    res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.attachment(`requerimento_${requerimento.id}.docx`);
+    res.send(arquivo);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/requerimentos/:id/pdf', acessoRequerimentos('visualizar'), async (req, res, next) => {
+  try {
+    const requerimento = await requerimentosService.obterParaExportacao({
+      supabase, authUser: req.authUser, currentUser: req.currentUser,
+      requerimentoId: req.params.id,
+    });
+    const arquivo = await gerarRequerimentoPdf(requerimento);
+    res.type('application/pdf');
+    res.attachment(`requerimento_${requerimento.id}.pdf`);
+    res.send(arquivo);
   } catch (error) {
     next(error);
   }
