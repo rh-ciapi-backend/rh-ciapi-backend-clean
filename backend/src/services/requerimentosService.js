@@ -108,7 +108,29 @@ async function listar({ supabase, authUser, currentUser }) {
 
   const { data, error } = await query;
   if (error) throw error;
-  return data || [];
+  const itens = data || [];
+  if (currentUser.perfil === PERFIL_SERVIDOR || !itens.length) return itens;
+
+  const ids = [...new Set(itens.map((item) => item.servidor_id).filter(Boolean))];
+  const { data: amostra, error: erroAmostra } = await supabase
+    .from('servidores').select('*').limit(1);
+  if (erroAmostra) throw erroAmostra;
+  const colunas = new Set(Object.keys(amostra?.[0] || {}));
+  const nomes = new Map();
+  for (const coluna of ['servidor', 'id', 'servidor_id', 'uuid']) {
+    if (!colunas.has(coluna)) continue;
+    const { data: servidores, error: erroServidores } = await supabase
+      .from('servidores').select('*').in(coluna, ids);
+    if (erroServidores?.code === '22P02') continue;
+    if (erroServidores) throw erroServidores;
+    for (const servidor of servidores || []) {
+      nomes.set(String(servidor[coluna]), servidor.nome_completo || servidor.nomeCompleto || servidor.nome);
+    }
+  }
+  return itens.map((item) => ({
+    ...item,
+    servidor_nome: nomes.get(String(item.servidor_id)) || null,
+  }));
 }
 
 async function obterFormulario({ supabase, authUser, currentUser, servidorId }) {
