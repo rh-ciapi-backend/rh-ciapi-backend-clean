@@ -4,6 +4,7 @@ const { requirePermission } = require('../middleware/requirePermission');
 const { createAuditLogger } = require('../middleware/auditLogger');
 const adminUsersService = require('../services/adminUsersService');
 const requerimentosService = require('../services/requerimentosService');
+const portalAcessoService = require('../services/portalAcessoService');
 const { gerarRequerimentoDocx, gerarRequerimentoPdf } = require('../services/requerimentosDocxService');
 
 const router = express.Router();
@@ -40,11 +41,41 @@ async function authenticate(req, res, next) {
   }
 }
 
+// Login público apenas com link individual, CPF e senha inicial.
+router.post('/portal/entrar', async (req, res, next) => {
+  try {
+    const session = await portalAcessoService.entrar(
+      supabase, req.body?.cpf, req.body?.senha, req.body?.acesso, req.ip,
+    );
+    res.set('Cache-Control', 'no-store');
+    res.json({ session });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.use(authenticate);
 
 router.get('/me', (req, res) => {
   const { id, perfil, status, is_master: isMaster } = req.currentUser;
   res.json({ user: { id, perfil, status, is_master: isMaster } });
+});
+
+router.post('/requerimentos/acesso', async (req, res, next) => {
+  try {
+    if (!req.currentUser.is_master &&
+      !['ADMINISTRADOR', 'RH'].includes(req.currentUser.perfil)) {
+      return res.status(403).json({ error: 'Acesso reservado à administração.' });
+    }
+    if (req.currentUser.status !== 'ATIVO') {
+      return res.status(403).json({ error: 'Usuário sem acesso ativo.' });
+    }
+    const acesso = await portalAcessoService.criarAcesso(supabase, req.body?.servidorId);
+    res.set('Cache-Control', 'no-store');
+    return res.json(acesso);
+  } catch (error) {
+    return next(error);
+  }
 });
 
 function acessoRequerimentos(acao) {
