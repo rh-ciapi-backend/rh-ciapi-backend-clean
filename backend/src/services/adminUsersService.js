@@ -59,6 +59,22 @@ async function getUserPermissions(supabase, userId, profile) {
 async function getCurrentActor(supabase, authUser) {
   const email = String(authUser?.email || '').trim().toLowerCase();
 
+  // Vínculo criado pelo RH: nunca concede acesso aos módulos internos.
+  const { data: acessoServidor, error: erroAcesso } = await supabase
+    .from('rh_servidor_acessos').select('servidor_id')
+    .eq('auth_uid', authUser.id).maybeSingle();
+  if (erroAcesso) throw erroAcesso;
+  if (acessoServidor) {
+    return {
+      id: authUser.id,
+      email,
+      perfil: PROFILES.SERVIDOR_LIMITADO,
+      status: 'ATIVO',
+      is_master: false,
+      permissions: buildDefaultPermissions(PROFILES.SERVIDOR_LIMITADO),
+    };
+  }
+
   const { data, error } = await supabase
     .from('system_users')
     .select('*')
