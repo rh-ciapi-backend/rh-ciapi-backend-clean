@@ -1,129 +1,212 @@
-const crypto = require('crypto');
-const { createClient } = require('@supabase/supabase-js');
+const PERFIL_SERVIDOR = 'SERVIDOR_LIMITADO';
 
-const tentativas = new Map();
+const CAMPOS = new Set([
+  'nome', 'nacionalidade', 'estadoCivil', 'cpf', 'rg', 'orgaoExpedidor',
+  'dataExpedicao', 'pasep', 'tituloEleitor', 'dataNascimento', 'pai', 'mae',
+  'cargo', 'matricula', 'funcao', 'classe', 'lotacao', 'unidadeExercicio',
+  'endereco', 'numero', 'complemento', 'bairro', 'cep', 'municipio', 'uf',
+  'telefoneTrabalho', 'telefoneResidencial', 'celular', 'regime',
+  'situacao', 'dataExoneracao',
+]);
 
-function falha(mensagem, statusCode = 400) {
-  const erro = new Error(mensagem);
-  erro.statusCode = statusCode;
-  return erro;
+function erro(message, statusCode = 400) {
+  const result = new Error(message);
+  result.statusCode = statusCode;
+  return result;
 }
 
-function cpfLimpo(valor) {
-  const cpf = String(valor || '').replace(/\D/g, '');
-  if (!/^\d{11}$/.test(cpf)) throw falha('Informe um CPF válido.');
-  return cpf;
+function texto(value, limite = 250) {
+  return typeof value === 'string' ? value.trim().slice(0, limite) : '';
 }
 
-function emailInterno(cpf) {
-  return `${cpf}@acesso.rhciapi.com.br`;
+function filtrarCampos(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw erro('Dados do formulário inválidos.');
+  }
+  const result = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (CAMPOS.has(key)) result[key] = texto(value, 500);
+  }
+  return result;
 }
 
-function senhaInterna(cpf) {
-  const segredo = String(process.env.PORTAL_AUTH_SECRET || '');
-  if (segredo.length < 32) throw falha('Configure PORTAL_AUTH_SECRET no backend.', 503);
-  return crypto.createHmac('sha256', segredo).update(`requerimento:${cpf}`).digest('hex');
+async function idDoServidor(supabase, authUser, currentUser, solicitado) {
+  if (currentUser.perfil !== PERFIL_SERVIDOR) {
+    const id = texto(solicitado, 100);
+    if (!id) throw erro('Selecione um servidor.');
+    return id;
+  }
+
+  const { data, error } = await supabase
+    .from('rh_servidor_acessos')
+    .select('servidor_id')
+    .eq('auth_uid', authUser.id)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data?.servidor_id) {
+    throw erro('Conta ainda não vinculada ao cadastro do servidor.', 403);
+  }
+  return data.servidor_id;
 }
 
-function linkPortal(token) {
-  return `${String(process.env.PORTAL_FRONTEND_URL || 'https://www.rhciapi.com.br').replace(/\/$/, '')}/#/requerimento?acesso=${token}`;
-}
+async function buscarServidor(supabase, referencia) {
+  const id = texto(referencia, 100);
+  if (!id) throw erro('Selecione um servidor.');
 
-async function buscarServidor(supabase, servidorId) {
-  const id = String(servidorId || '').trim();
-  if (!id) throw falha('Selecione um servidor.');
-  const { data: amostra, error: erroAmostra } = await supabase.from('servidores').select('*').limit(1);
+  const { data: amostra, error: erroAmostra } = await supabase
+    .from('servidores').select('*').limit(1);
+
   if (erroAmostra) throw erroAmostra;
-  const colunas = new Set(Object.keys(amostra?.[0] || {}));
-  for (const coluna of ['servidor', 'id', 'servidor_id', 'uuid', 'matricula']) {
+  if (!amostra?.length) throw erro('Servidor não encontrado.', 404);
+
+  const colunas = new Set(Object.keys(amostra[0]));
+  const cpf = id.replace(/\D/g, '');
+  const cpfFormatado = cpf.length === 11
+    ? cpf.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4')
+    : '';
+
+  const candidatos = [
+    ['servidor', id],
+    ['id', id],
+    ['servidor_id', id],
+    ['uuid', id],
+    ...(cpf.length === 11 ? [['cpf', cpf], ['cpf', cpfFormatado]] : []),
+    ['matricula', id],
+    ['nome_completo', id],
+  ];
+
+  for (const [coluna, valor] of candidatos) {
     if (!colunas.has(coluna)) continue;
-    const { data, error } = await supabase.from('servidores').select('*').eq(coluna, id).limit(1).maybeSingle();
+
+    const { data, error } = await supabase
+      .from('servidores')
+      .select('*')
+      .eq(coluna, valor)
+      .limit(1)
+      .maybeSingle();
+
     if (error?.code === '22P02') continue;
     if (error) throw error;
     if (data) return data;
   }
-  throw falha('Servidor não encontrado.', 404);
+
+  throw erro('Servidor não encontrado.', 404);
 }
 
-async function buscarPorCpf(supabase, cpf) {
-  for (const valor of [cpf, cpf.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4')]) {
-    const { data, error } = await supabase.from('servidores').select('*').eq('cpf', valor).limit(1).maybeSingle();
-    if (error) throw error;
-    if (data) return data;
+async function listar({ supabase, authUser, currentUser }) {
+  let query = supabase
+    .from('rh_requerimentos')
+    .select('id,servidor_id,tipo,detalhes,status,criado_em,atualizado_em')
+    .order('criado_em', { ascending: false })
+    .limit(100);
+
+  if (currentUser.perfil === PERFIL_SERVIDOR) {
+    const servidorId = await idDoServidor(supabase, authUser, currentUser);
+    query = query.eq('servidor_id', servidorId);
   }
-  return null;
-}
 
-async function criarAcesso(supabase, servidorId) {
-  const servidor = await buscarServidor(supabase, servidorId);
-  const cpf = cpfLimpo(servidor.cpf);
-  const token = crypto.randomBytes(32).toString('hex');
-  const convite_hash = crypto.createHash('sha256').update(token).digest('hex');
-  const { data: existente, error: erroExistente } = await supabase
-    .from('rh_servidor_acessos').select('auth_uid').eq('servidor_id', String(servidorId)).maybeSingle();
-  if (erroExistente) throw erroExistente;
-  if (existente) {
-    const { data: usuario, error: erroUsuario } = await supabase.auth.admin.getUserById(existente.auth_uid);
-    if (erroUsuario) throw erroUsuario;
-    if (usuario?.user?.email !== emailInterno(cpf)) {
-      throw falha('Este servidor já possui outro tipo de acesso. Verifique o cadastro antes de gerar o link.', 409);
+  const { data, error } = await query;
+  if (error) throw error;
+  const itens = data || [];
+  if (currentUser.perfil === PERFIL_SERVIDOR || !itens.length) return itens;
+
+  const ids = [...new Set(itens.map((item) => item.servidor_id).filter(Boolean))];
+  const { data: amostra, error: erroAmostra } = await supabase
+    .from('servidores').select('*').limit(1);
+  if (erroAmostra) throw erroAmostra;
+  const colunas = new Set(Object.keys(amostra?.[0] || {}));
+  const nomes = new Map();
+  for (const coluna of ['servidor', 'id', 'servidor_id', 'uuid']) {
+    if (!colunas.has(coluna)) continue;
+    const { data: servidores, error: erroServidores } = await supabase
+      .from('servidores').select('*').in(coluna, ids);
+    if (erroServidores?.code === '22P02') continue;
+    if (erroServidores) throw erroServidores;
+    for (const servidor of servidores || []) {
+      nomes.set(String(servidor[coluna]), servidor.nome_completo || servidor.nomeCompleto || servidor.nome);
     }
-    const { error } = await supabase.from('rh_servidor_acessos')
-      .update({ convite_hash }).eq('servidor_id', String(servidorId));
-    if (error) throw error;
-    return { url: linkPortal(token), cpf, criado: false };
   }
-
-  const { data, error } = await supabase.auth.admin.createUser({
-    email: emailInterno(cpf), password: senhaInterna(cpf), email_confirm: true,
-  });
-  if (error || !data?.user) throw falha(error?.message || 'Falha ao criar acesso do servidor.', 409);
-
-  const { error: erroVinculo } = await supabase.from('rh_servidor_acessos').insert({
-    auth_uid: data.user.id, servidor_id: String(servidorId), convite_hash,
-  });
-  if (erroVinculo) {
-    await supabase.auth.admin.deleteUser(data.user.id);
-    throw erroVinculo;
-  }
-  return { url: linkPortal(token), cpf, criado: true };
+  return itens.map((item) => ({
+    ...item,
+    servidor_nome: nomes.get(String(item.servidor_id)) || null,
+  }));
 }
 
-async function entrar(supabase, cpfInformado, pinInformado, convite, ip) {
-  const cpf = cpfLimpo(cpfInformado);
-  const pin = String(pinInformado || '');
-  const chave = `${ip}:${cpf}`;
-  const registro = tentativas.get(chave) || { quantidade: 0, ate: 0 };
-  if (registro.ate > Date.now()) throw falha('Aguarde alguns minutos e tente novamente.', 429);
+async function obterFormulario({ supabase, authUser, currentUser, servidorId }) {
+  const id = await idDoServidor(supabase, authUser, currentUser, servidorId);
+  const servidor = await buscarServidor(supabase, id);
 
-  const servidor = await buscarPorCpf(supabase, cpf);
-  if (!servidor || pin !== cpf.slice(0, 5)) {
-    const quantidade = registro.quantidade + 1;
-    tentativas.set(chave, { quantidade, ate: quantidade >= 5 ? Date.now() + 15 * 60_000 : 0 });
-    throw falha('CPF ou senha inválidos.', 401);
-  }
+  const { data: complemento, error: erroComplemento } = await supabase
+    .from('rh_servidor_complementos')
+    .select('dados')
+    .eq('servidor_id', id)
+    .maybeSingle();
 
-  const autenticador = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-  const { data, error } = await autenticador.auth.signInWithPassword({
-    email: emailInterno(cpf), password: senhaInterna(cpf),
-  });
-  if (error || !data?.session) {
-    tentativas.set(chave, { quantidade: registro.quantidade + 1, ate: Date.now() + 60_000 });
-    throw falha('CPF ou senha inválidos.', 401);
-  }
-  const { data: vinculo, error: erroVinculo } = await supabase.from('rh_servidor_acessos')
-    .select('servidor_id,convite_hash').eq('auth_uid', data.user.id).maybeSingle();
-  if (erroVinculo) throw erroVinculo;
-  if (!vinculo) throw falha('Acesso não vinculado a servidor.', 403);
-  const hash = crypto.createHash('sha256').update(String(convite || '')).digest('hex');
-  if (!vinculo.convite_hash || !crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(vinculo.convite_hash))) {
-    tentativas.set(chave, { quantidade: registro.quantidade + 1, ate: Date.now() + 60_000 });
-    throw falha('Link de acesso inválido. Solicite um novo link ao RH.', 403);
-  }
-  tentativas.delete(chave);
-  return data.session;
+  if (erroComplemento) throw erroComplemento;
+  return { servidor, complemento: complemento?.dados || {} };
 }
 
-module.exports = { criarAcesso, entrar };
+async function criar({ supabase, authUser, currentUser, payload }) {
+  const id = await idDoServidor(
+    supabase, authUser, currentUser, payload?.servidorId
+  );
+  const tipo = texto(payload?.tipo, 180);
+  const detalhes = texto(payload?.detalhes, 5000);
+
+  if (!tipo) throw erro('Selecione o tipo de requerimento.');
+  const dados = filtrarCampos(payload?.dados);
+
+  await buscarServidor(supabase, id);
+
+  const { error: erroComplemento } = await supabase
+    .from('rh_servidor_complementos')
+    .upsert(
+      {
+        servidor_id: id,
+        dados,
+        atualizado_por: authUser.id,
+        atualizado_em: new Date().toISOString(),
+      },
+      { onConflict: 'servidor_id' }
+    );
+
+  if (erroComplemento) throw erroComplemento;
+
+  const { data: requerimento, error: erroRequerimento } = await supabase
+    .from('rh_requerimentos')
+    .insert({
+      servidor_id: id,
+      enviado_por: authUser.id,
+      tipo,
+      detalhes,
+      dados_snapshot: dados,
+    })
+    .select('id,servidor_id,tipo,detalhes,status,criado_em')
+    .single();
+
+  if (erroRequerimento) throw erroRequerimento;
+  return requerimento;
+}
+
+async function obterParaExportacao({ supabase, authUser, currentUser, requerimentoId }) {
+  const id = texto(requerimentoId, 100);
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw erro('Requerimento não encontrado.', 404);
+
+  let query = supabase
+    .from('rh_requerimentos')
+    .select('id,servidor_id,tipo,detalhes,dados_snapshot,criado_em')
+    .eq('id', id);
+
+  if (currentUser.perfil === PERFIL_SERVIDOR) {
+    const servidorId = await idDoServidor(supabase, authUser, currentUser);
+    query = query.eq('servidor_id', servidorId);
+  }
+
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  if (!data) throw erro('Requerimento não encontrado.', 404);
+  return data;
+}
+
+module.exports = { listar, obterFormulario, criar, obterParaExportacao };
