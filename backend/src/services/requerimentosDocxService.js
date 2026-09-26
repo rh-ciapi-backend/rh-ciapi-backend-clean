@@ -1,6 +1,10 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const PizZip = require('pizzip');
+const executar = promisify(execFile);
 
 const OPCOES = {
   'Certidão de tempo de serviço e ficha financeira': 'CERTIDAO DE TEMPO DE SERVICO E FICHA FINANCEIRA',
@@ -78,7 +82,6 @@ function gerarRequerimentoDocx(requerimento) {
       const texto = [...paragrafo.matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)]
         .map((item) => item[1]).join('');
       if (!normalizar(texto).includes(marcador)) return paragrafo;
-
       const alterado = paragrafo.replace(
         /(<w:t\b[^>]*>)\(\s*(<\/w:t>)/,
         '$1(X$2'
@@ -86,37 +89,25 @@ function gerarRequerimentoDocx(requerimento) {
       if (alterado !== paragrafo) encontrados += 1;
       return alterado;
     });
-    if (encontrados !== 1) {
-      throw new Error('Não foi possível marcar o pedido no modelo Word.');
-    }
+    if (encontrados !== 1) throw new Error('Não foi possível marcar o pedido no modelo Word.');
   }
 
   const dados = requerimento.dados_snapshot || {};
   const data = new Date(requerimento.criado_em);
-  if (Number.isNaN(data.getTime())) {
-    throw new Error('Data do requerimento inválida.');
-  }
-
+  if (Number.isNaN(data.getTime())) throw new Error('Data do requerimento inválida.');
   const partes = new Intl.DateTimeFormat('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
+    day: '2-digit', month: '2-digit', year: 'numeric',
     timeZone: 'America/Boa_Vista',
   }).formatToParts(data);
-  const componente = (nome) =>
-    partes.find((parte) => parte.type === nome)?.value || '';
+  const componente = (nome) => partes.find((parte) => parte.type === nome)?.value || '';
 
   const valores = {
     DT: requerimento.detalhes || '',
-    DI: componente('day'),
-    ME: componente('month'),
-    AN: componente('year'),
+    DI: componente('day'), ME: componente('month'), AN: componente('year'),
   };
-
   const regime = normalizar(dados.regime);
   const situacao = normalizar(dados.situacao);
   const exonerado = situacao === 'EXONERADO';
-
   Object.assign(valores, {
     EF: regime === 'EFETIVO' ? 'X' : '',
     CC: regime === 'CARGO COMISSIONADO' || regime === 'COMISSIONADO' ? 'X' : '',
@@ -128,18 +119,13 @@ function gerarRequerimentoDocx(requerimento) {
     EXS: exonerado ? 'X' : '',
     ED: dataBR(dados.dataExoneracao),
   });
-
   for (const [marcadorCampo, nomeCampo] of Object.entries(CAMPOS)) {
     valores[marcadorCampo] = nomeCampo.startsWith('data')
-      ? dataBR(dados[nomeCampo])
-      : dados[nomeCampo] || '';
+      ? dataBR(dados[nomeCampo]) : dados[nomeCampo] || '';
   }
-
   for (const [chave, valor] of Object.entries(valores)) {
     const token = `{{${chave}}}`;
-    if (!xml.includes(token)) {
-      throw new Error(`Campo ${token} ausente no modelo Word.`);
-    }
+    if (!xml.includes(token)) throw new Error(`Campo ${token} ausente no modelo Word.`);
     xml = xml.split(token).join(xmlSeguro(valor));
   }
 
@@ -147,4 +133,28 @@ function gerarRequerimentoDocx(requerimento) {
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-module.exports = { gerarRequerimentoDocx };
+async function gerarRequerimentoPdf(requerimento) {
+  const docx = gerarRequerimentoDocx(requerimento);
+  const pasta = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'requerimento-'));
+  const arquivoWord = path.join(pasta, 'requerimento.docx');
+  const arquivoPdf = path.join(pasta, 'requerimento.pdf');
+  const perfilLibreOffice = `file://${path.join(pasta, 'perfil')}`;
+
+  try {
+    await fs.promises.writeFile(arquivoWord, docx);
+    await executar('libreoffice', [
+      '-env:UserInstallation=' + perfilLibreOffice,
+      '--headless', '--convert-to', 'pdf:writer_pdf_Export',
+      '--outdir', pasta, arquivoWord,
+    ], { timeout: 60000, maxBuffer: 1024 * 1024 });
+    const pdf = await fs.promises.readFile(arquivoPdf);
+    if (pdf.subarray(0, 5).toString() !== '%PDF-') {
+      throw new Error('Falha ao converter o requerimento para PDF.');
+    }
+    return pdf;
+  } finally {
+    await fs.promises.rm(pasta, { recursive: true, force: true });
+  }
+}
+
+module.exports = { gerarRequerimentoDocx, gerarRequerimentoPdf };
