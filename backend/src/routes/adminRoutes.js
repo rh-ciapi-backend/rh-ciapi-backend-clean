@@ -4,6 +4,7 @@ const { requirePermission } = require('../middleware/requirePermission');
 const { createAuditLogger } = require('../middleware/auditLogger');
 const adminUsersService = require('../services/adminUsersService');
 const requerimentosService = require('../services/requerimentosService');
+const { gerarRequerimentoDocx } = require('../services/requerimentosDocxService');
 
 const router = express.Router();
 
