@@ -1,0 +1,26 @@
+CIAPI SAE — integração do módulo Triagem no backend/server.js
+
+NÃO substitua o server.js inteiro.
+Adicione apenas estes dois blocos ao server atual.
+
+1) Próximo aos outros safeRequire do SAE:
+
+const saeTriagemRoutes = safeRequire(
+  "./src/routes/saeTriagemRoutes",
+  "saeTriagemRoutes"
+);
+
+2) Próximo aos app.use("/api/sae/..."):
+
+if (saeTriagemRoutes) {
+  app.use("/api/sae/triagem", saeTriagemRoutes);
+} else {
+  console.warn("[BOOT] Rotas de triagem do SAE não registradas.");
+}
+
+3) Opcional, dentro do objeto "routes" do /health:
+
+saeTriagem: Boolean(saeTriagemRoutes),
+
+Após o deploy, o /health deve mostrar:
+"saeTriagem": true
