@@ -101,6 +101,7 @@ async function listar({ supabase, authUser, currentUser }) {
   let query = supabase
     .from('rh_requerimentos')
     .select('id,servidor_id,tipo,detalhes,status,criado_em,atualizado_em')
+    .is('arquivado_em', null)
     .order('criado_em', { ascending: false })
     .limit(100);
 
@@ -212,4 +213,23 @@ async function obterParaExportacao({ supabase, authUser, currentUser, requerimen
   return data;
 }
 
-module.exports = { listar, obterFormulario, criar, obterParaExportacao };
+async function arquivar({ supabase, requerimentoId }) {
+  const id = texto(requerimentoId, 100);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    throw erro('Requerimento não encontrado.', 404);
+  }
+
+  const agora = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('rh_requerimentos')
+    .update({ arquivado_em: agora, atualizado_em: agora })
+    .eq('id', id)
+    .is('arquivado_em', null)
+    .select('id')
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) throw erro('Requerimento não encontrado na lista.', 404);
+}
+
+module.exports = { listar, obterFormulario, criar, obterParaExportacao, arquivar };
