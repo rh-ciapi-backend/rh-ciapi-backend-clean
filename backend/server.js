@@ -74,29 +74,50 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.warn("SUPABASE_URL ou SUPABASE_SERVICE_KEY não configurados.");
 }
 
-const supabase = createClient(SUPABASE_URL || "", SUPABASE_SERVICE_KEY || "");
+const supabase = createClient(
+  SUPABASE_URL || "",
+  SUPABASE_SERVICE_KEY || ""
+);
+
 app.locals.supabase = supabase;
 
-const exportDir = process.env.EXPORT_DIR || path.join("/tmp", "exports");
+const exportDir =
+  process.env.EXPORT_DIR || path.join("/tmp", "exports");
 
 try {
   if (!fs.existsSync(exportDir)) {
     fs.mkdirSync(exportDir, { recursive: true });
   }
+
   app.locals.exportDir = exportDir;
 } catch (err) {
-  console.warn("Não foi possível preparar EXPORT_DIR:", String(err));
+  console.warn(
+    "Não foi possível preparar EXPORT_DIR:",
+    String(err)
+  );
 }
 
 function safeRequire(modulePath, label) {
   try {
     const loaded = require(modulePath);
-    console.log(`[BOOT] ${label} carregado: ${modulePath}`);
+
+    console.log(
+      `[BOOT] ${label} carregado: ${modulePath}`
+    );
+
     return loaded;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.log(`[BOOT] ${label} não carregado: ${modulePath}`);
+    const message =
+      error instanceof Error
+        ? error.message
+        : String(error);
+
+    console.log(
+      `[BOOT] ${label} não carregado: ${modulePath}`
+    );
+
     console.log(`[BOOT] Motivo: ${message}`);
+
     return null;
   }
 }
@@ -151,8 +172,15 @@ const saeAgendamentosRoutes = safeRequire(
   "saeAgendamentosRoutes"
 );
 
+const saeTriagemRoutes = safeRequire(
+  "./src/routes/saeTriagemRoutes",
+  "saeTriagemRoutes"
+);
+
 app.get("/", (_req, res) => {
-  return res.status(200).send("RH CIAPI Backend OK");
+  return res
+    .status(200)
+    .send("RH CIAPI Backend OK");
 });
 
 app.get("/health", (_req, res) => {
@@ -167,34 +195,58 @@ app.get("/health", (_req, res) => {
     routes: {
       feriasExport: Boolean(feriasExportRoutes),
       frequencia: Boolean(frequenciaRoutes),
-      frequenciaExport: Boolean(frequenciaExportRoutes),
+      frequenciaExport: Boolean(
+        frequenciaExportRoutes
+      ),
       mapas: Boolean(mapasRoutes),
       mapasExport: Boolean(mapasExportRoutes),
       eventos: Boolean(eventosRoutes),
       administracao: Boolean(adminRoutes),
-      saeProfissionais: Boolean(saeProfissionaisRoutes),
+      saeProfissionais: Boolean(
+        saeProfissionaisRoutes
+      ),
       saeAgenda: Boolean(saeAgendaRoutes),
-      saeAgendamentos: Boolean(saeAgendamentosRoutes),
+      saeAgendamentos: Boolean(
+        saeAgendamentosRoutes
+      ),
+      saeTriagem: Boolean(saeTriagemRoutes),
     },
   });
 });
 
 app.get("/api/servidores", async (req, res) => {
   try {
-    const token = String(req.headers.authorization || "")
+    const token = String(
+      req.headers.authorization || ""
+    )
       .replace(/^Bearer\s+/i, "")
       .trim();
 
     if (!token) {
-      return res.status(401).json({ ok: false, error: "Token ausente." });
+      return res.status(401).json({
+        ok: false,
+        error: "Token ausente.",
+      });
     }
 
-    const { data: auth, error: authError } = await supabase.auth.getUser(token);
+    const {
+      data: auth,
+      error: authError,
+    } = await supabase.auth.getUser(token);
+
     if (authError || !auth?.user) {
-      return res.status(401).json({ ok: false, error: "Token inválido." });
+      return res.status(401).json({
+        ok: false,
+        error: "Token inválido.",
+      });
     }
 
-    const actor = await adminUsersService.getCurrentActor(supabase, auth.user);
+    const actor =
+      await adminUsersService.getCurrentActor(
+        supabase,
+        auth.user
+      );
+
     const perfisAutorizados = [
       "MASTER",
       "ADMINISTRADOR",
@@ -205,12 +257,14 @@ app.get("/api/servidores", async (req, res) => {
 
     if (
       (!actor.id && !actor.is_master) ||
-      (!actor.is_master && actor.status !== "ATIVO") ||
+      (!actor.is_master &&
+        actor.status !== "ATIVO") ||
       !perfisAutorizados.includes(actor.perfil)
     ) {
-      return res
-        .status(403)
-        .json({ ok: false, error: "Acesso negado aos servidores." });
+      return res.status(403).json({
+        ok: false,
+        error: "Acesso negado aos servidores.",
+      });
     }
 
     const { data, error } = await supabase
@@ -227,85 +281,155 @@ app.get("/api/servidores", async (req, res) => {
 
     return res.status(200).json({
       ok: true,
-      data: Array.isArray(data) ? data : [],
+      data: Array.isArray(data)
+        ? data
+        : [],
     });
   } catch (error) {
     return res.status(500).json({
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error:
+        error instanceof Error
+          ? error.message
+          : String(error),
     });
   }
 });
 
 if (feriasExportRoutes) {
-  app.use("/api/ferias", feriasExportRoutes);
+  app.use(
+    "/api/ferias",
+    feriasExportRoutes
+  );
 } else {
-  console.warn("[BOOT] Rotas de férias não registradas.");
+  console.warn(
+    "[BOOT] Rotas de férias não registradas."
+  );
 }
 
 if (frequenciaRoutes) {
-  app.use("/api/frequencia", frequenciaRoutes);
+  app.use(
+    "/api/frequencia",
+    frequenciaRoutes
+  );
 } else {
-  console.warn("[BOOT] Rotas principais de frequência não registradas.");
+  console.warn(
+    "[BOOT] Rotas principais de frequência não registradas."
+  );
 }
 
 if (frequenciaExportRoutes) {
-  app.use("/api/frequencia", frequenciaExportRoutes);
+  app.use(
+    "/api/frequencia",
+    frequenciaExportRoutes
+  );
 } else {
-  console.warn("[BOOT] Rotas de exportação da frequência não registradas.");
+  console.warn(
+    "[BOOT] Rotas de exportação da frequência não registradas."
+  );
 }
 
 if (mapasRoutes) {
-  app.use("/api/mapas", mapasRoutes);
+  app.use(
+    "/api/mapas",
+    mapasRoutes
+  );
 } else {
-  console.warn("[BOOT] Rotas principais de mapas não registradas.");
+  console.warn(
+    "[BOOT] Rotas principais de mapas não registradas."
+  );
 }
 
 if (mapasExportRoutes) {
-  app.use("/api/mapas", mapasExportRoutes);
+  app.use(
+    "/api/mapas",
+    mapasExportRoutes
+  );
 } else {
-  console.warn("[BOOT] Rotas de exportação dos mapas não registradas.");
+  console.warn(
+    "[BOOT] Rotas de exportação dos mapas não registradas."
+  );
 }
 
 if (eventosRoutes) {
-  app.use("/api/eventos", eventosRoutes);
+  app.use(
+    "/api/eventos",
+    eventosRoutes
+  );
 } else {
-  console.warn("[BOOT] Rotas de eventos não registradas.");
+  console.warn(
+    "[BOOT] Rotas de eventos não registradas."
+  );
 }
 
 if (adminRoutes) {
-  app.use("/api/admin", adminRoutes);
+  app.use(
+    "/api/admin",
+    adminRoutes
+  );
 } else {
-  console.warn("[BOOT] Rotas de administração não registradas.");
+  console.warn(
+    "[BOOT] Rotas de administração não registradas."
+  );
 }
 
 if (saeProfissionaisRoutes) {
-  app.use("/api/sae/profissionais", saeProfissionaisRoutes);
+  app.use(
+    "/api/sae/profissionais",
+    saeProfissionaisRoutes
+  );
 } else {
-  console.warn("[BOOT] Rotas de profissionais do SAE não registradas.");
+  console.warn(
+    "[BOOT] Rotas de profissionais do SAE não registradas."
+  );
 }
 
 if (saeAgendaRoutes) {
-  app.use("/api/sae/agenda", saeAgendaRoutes);
+  app.use(
+    "/api/sae/agenda",
+    saeAgendaRoutes
+  );
 } else {
-  console.warn("[BOOT] Rotas de agenda do SAE não registradas.");
+  console.warn(
+    "[BOOT] Rotas de agenda do SAE não registradas."
+  );
 }
 
 if (saeAgendamentosRoutes) {
-  app.use("/api/sae/agendamentos", saeAgendamentosRoutes);
+  app.use(
+    "/api/sae/agendamentos",
+    saeAgendamentosRoutes
+  );
 } else {
-  console.warn("[BOOT] Rotas de agendamentos do SAE não registradas.");
+  console.warn(
+    "[BOOT] Rotas de agendamentos do SAE não registradas."
+  );
+}
+
+if (saeTriagemRoutes) {
+  app.use(
+    "/api/sae/triagem",
+    saeTriagemRoutes
+  );
+} else {
+  console.warn(
+    "[BOOT] Rotas de triagem do SAE não registradas."
+  );
 }
 
 app.use((req, res) => {
   return res.status(404).json({
     ok: false,
-    error: `Rota não encontrada: ${req.method} ${req.originalUrl}`,
+    error:
+      `Rota não encontrada: ${req.method} ${req.originalUrl}`,
   });
 });
 
 app.use((err, _req, res, next) => {
-  console.error("Erro no backend:", err);
+  console.error(
+    "Erro no backend:",
+    err
+  );
 
   if (res.headersSent) {
     return next(err);
@@ -321,22 +445,79 @@ app.use((err, _req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Backend rodando na porta ${PORT}`);
-  console.log("Health: GET /health");
-  console.log("Servidores: GET /api/servidores");
-  console.log("Frequência: GET /api/frequencia");
-  console.log("Exportação de frequência: POST /api/frequencia/exportar");
-  console.log("Mapas: GET /api/mapas/preview");
-  console.log("Validação de mapas: POST /api/mapas/validar");
-  console.log("Exportação de mapas DOCX: POST /api/mapas/exportar/docx");
-  console.log("Exportação de mapas PDF: POST /api/mapas/exportar/pdf");
-  console.log("Exportação de mapas ZIP: POST /api/mapas/exportar/zip");
-  console.log("Exportação de férias: POST /api/ferias/exportar");
-  console.log("Eventos: GET /api/eventos");
-  console.log("Tipos de evento: GET /api/eventos/tipos");
-  console.log("Administração: GET /api/admin/users");
-  console.log("Logs de auditoria: GET /api/admin/logs");
-  console.log("SAE Profissionais: GET /api/sae/profissionais");
-  console.log("SAE Agenda: GET /api/sae/agenda/profissionais/:profissionalId");
-  console.log("SAE Agendamentos: GET /api/sae/agendamentos/disponibilidade");
+  console.log(
+    `Backend rodando na porta ${PORT}`
+  );
+
+  console.log(
+    "Health: GET /health"
+  );
+
+  console.log(
+    "Servidores: GET /api/servidores"
+  );
+
+  console.log(
+    "Frequência: GET /api/frequencia"
+  );
+
+  console.log(
+    "Exportação de frequência: POST /api/frequencia/exportar"
+  );
+
+  console.log(
+    "Mapas: GET /api/mapas/preview"
+  );
+
+  console.log(
+    "Validação de mapas: POST /api/mapas/validar"
+  );
+
+  console.log(
+    "Exportação de mapas DOCX: POST /api/mapas/exportar/docx"
+  );
+
+  console.log(
+    "Exportação de mapas PDF: POST /api/mapas/exportar/pdf"
+  );
+
+  console.log(
+    "Exportação de mapas ZIP: POST /api/mapas/exportar/zip"
+  );
+
+  console.log(
+    "Exportação de férias: POST /api/ferias/exportar"
+  );
+
+  console.log(
+    "Eventos: GET /api/eventos"
+  );
+
+  console.log(
+    "Tipos de evento: GET /api/eventos/tipos"
+  );
+
+  console.log(
+    "Administração: GET /api/admin/users"
+  );
+
+  console.log(
+    "Logs de auditoria: GET /api/admin/logs"
+  );
+
+  console.log(
+    "SAE Profissionais: GET /api/sae/profissionais"
+  );
+
+  console.log(
+    "SAE Agenda: GET /api/sae/agenda/profissionais/:profissionalId"
+  );
+
+  console.log(
+    "SAE Agendamentos: GET /api/sae/agendamentos/disponibilidade"
+  );
+
+  console.log(
+    "SAE Triagem: GET /api/sae/triagem"
+  );
 });
