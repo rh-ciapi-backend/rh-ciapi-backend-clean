@@ -142,6 +142,18 @@ router.post('/requerimentos', acessoRequerimentos('criar'), async (req, res, nex
   }
 });
 
+router.patch('/requerimentos/:id/arquivar', acessoRequerimentos('criar'), async (req, res, next) => {
+  try {
+    if (!req.currentUser.is_master && !['ADMINISTRADOR', 'RH'].includes(req.currentUser.perfil)) {
+      return res.status(403).json({ error: 'Acesso reservado à administração.' });
+    }
+    await requerimentosService.arquivar({ supabase, requerimentoId: req.params.id });
+    return res.json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get('/requerimentos/:id/docx', acessoRequerimentos('visualizar'), async (req, res, next) => {
   try {
     const requerimento = await requerimentosService.obterParaExportacao({
