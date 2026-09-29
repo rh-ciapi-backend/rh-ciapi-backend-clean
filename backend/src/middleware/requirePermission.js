@@ -1,4 +1,4 @@
-const { MASTER_EMAIL, PROFILES } = require('../config/accessControl');
+const { isMasterEmail, canAccessEnvironment, PROFILES } = require('../config/accessControl');
 
 function requirePermission(moduleName, actionName = 'visualizar') {
   return async (req, res, next) => {
@@ -9,13 +9,18 @@ function requirePermission(moduleName, actionName = 'visualizar') {
         return res.status(401).json({ error: 'Usuário não autenticado.' });
       }
 
-      if ((currentUser.email || '').toLowerCase() === MASTER_EMAIL.toLowerCase() || currentUser.is_master) {
-        return next();
-      }
-
       if (currentUser.status && currentUser.status !== 'ATIVO') {
         return res.status(403).json({ error: 'Usuário sem acesso ativo.' });
       }
+
+      const environment = moduleName.startsWith('sae_') ? 'SAE' :
+        moduleName === 'administracao' ? (req.accessEnvironment || 'RH') : 'RH';
+      if (currentUser.perfil !== PROFILES.SERVIDOR_LIMITADO &&
+          !canAccessEnvironment(currentUser, environment)) {
+        return res.status(403).json({ error: 'Acesso negado a este ambiente.' });
+      }
+      if (isMasterEmail(currentUser.email) && currentUser.is_master) return next();
+      if (currentUser.perfil === PROFILES.MASTER) return next();
 
       if (currentUser.perfil === PROFILES.SERVIDOR_LIMITADO &&
           (moduleName !== 'requerimentos' || !['visualizar', 'criar'].includes(actionName))) {
