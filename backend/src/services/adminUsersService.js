@@ -4,6 +4,7 @@ const {
   normalizePermissions,
   isMasterEmail,
   assertMasterProtection,
+  allowedEnvironments, canAccessEnvironment, assertManagedUserAccess, accessError,
 } = require('../config/accessControl');
 
 function buildStats(users, logs) {
@@ -12,7 +13,7 @@ function buildStats(users, logs) {
     ativos: users.filter((item) => item.status === 'ATIVO').length,
     inativos: users.filter((item) => item.status === 'INATIVO').length,
     bloqueados: users.filter((item) => item.status === 'BLOQUEADO').length,
-    masters: users.filter((item) => item.is_master).length,
+    masters: users.filter((item) => item.perfil === PROFILES.MASTER).length,
     administradores: users.filter((item) => item.perfil === PROFILES.ADMINISTRADOR).length,
     logsHoje: (logs || []).length,
   };
@@ -30,7 +31,8 @@ function normalizeManagedUser(record, permissions = []) {
     ultimo_login_em: record.ultimo_login_em || null,
     tentativas_login_falhas: record.tentativas_login_falhas || 0,
     bloqueado_ate: record.bloqueado_ate || null,
-    is_master: !!record.is_master || isMasterEmail(record.email),
+    is_master: isMasterEmail(record.email),
+    ambiente: record.ambiente || 'RH',
     created_at: record.created_at,
     updated_at: record.updated_at,
     permissions,
@@ -57,6 +59,7 @@ async function getUserPermissions(supabase, userId, profile) {
 }
 
 async function getCurrentActor(supabase, authUser) {
+  if (!authUser?.id || !authUser?.email_confirmed_at) throw accessError('Login não confirmado.');
   const email = String(authUser?.email || '').trim().toLowerCase();
 
   // Vínculo criado pelo RH: nunca concede acesso aos módulos internos.
@@ -71,6 +74,8 @@ async function getCurrentActor(supabase, authUser) {
       perfil: PROFILES.SERVIDOR_LIMITADO,
       status: 'ATIVO',
       is_master: false,
+      ambiente: 'RH',
+      ambientes_permitidos: [],
       permissions: buildDefaultPermissions(PROFILES.SERVIDOR_LIMITADO),
     };
   }
@@ -84,21 +89,28 @@ async function getCurrentActor(supabase, authUser) {
   if (error) throw error;
 
   if (data) {
-    return {
+    if (data.auth_user_id !== authUser.id) {
+      throw accessError('Conta sem vínculo válido com o login. Solicite regularização ao administrador global.');
+    }
+    const actor = {
       id: data.id,
-      email: data.email,
+      email,
+      ambiente: data.ambiente || 'RH',
       perfil: data.perfil,
       status: data.status,
-      is_master: !!data.is_master || isMasterEmail(data.email),
-      permissions: await getUserPermissions(supabase, data.id, data.perfil),
+      is_master: isMasterEmail(email),
+      permissions: data.perfil === PROFILES.MASTER ? buildDefaultPermissions(PROFILES.MASTER) : await getUserPermissions(supabase, data.id, data.perfil),
     };
+    return { ...actor, ambientes_permitidos: allowedEnvironments(actor) };
   }
 
   return {
     id: null,
     email,
     perfil: isMasterEmail(email) ? PROFILES.MASTER : PROFILES.CONSULTA,
-    status: 'ATIVO',
+    status: isMasterEmail(email) ? 'ATIVO' : 'BLOQUEADO',
+    ambiente: 'RH',
+    ambientes_permitidos: isMasterEmail(email) ? ['RH', 'SAE'] : [],
     is_master: isMasterEmail(email),
     permissions: buildDefaultPermissions(
       isMasterEmail(email) ? PROFILES.MASTER : PROFILES.CONSULTA,
@@ -106,11 +118,18 @@ async function getCurrentActor(supabase, authUser) {
   };
 }
 
-async function getUsersWithPermissions(supabase, filters = {}) {
+async function getUsersWithPermissions(supabase, filters = {}, actor) {
+  if (!actor) throw accessError('Usuário não autenticado.');
   let query = supabase
     .from('system_users')
     .select('*')
     .order('nome_completo', { ascending: true });
+
+  if (!actor.is_master) {
+    query = query.eq('ambiente', actor.ambiente).eq('is_master', false);
+  } else if (['RH', 'SAE'].includes(filters.ambiente)) {
+    query = query.eq('ambiente', filters.ambiente);
+  }
 
   if (filters.termo) {
     query = query.or(
@@ -184,9 +203,9 @@ async function upsertPermissions(supabase, userId, permissions, profile) {
   return normalized;
 }
 
-async function listUsers(supabase, filters = {}) {
-  const users = await getUsersWithPermissions(supabase, filters);
-  const logs = await getTodayLogsCount(supabase);
+async function listUsers(supabase, filters = {}, actor) {
+  const users = await getUsersWithPermissions(supabase, filters, actor);
+  const logs = actor?.is_master ? await getTodayLogsCount(supabase) : [];
 
   return {
     users,
@@ -223,8 +242,15 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
 
   const email = String(payload.email || '').trim().toLowerCase();
   const isMaster = isMasterEmail(email);
+  if (isMaster && !actor.is_master) throw accessError('Somente um administrador global pode cadastrar esta conta.');
+  const ambiente = String(payload.ambiente || actor.ambiente || 'RH').toUpperCase();
+  if (!['RH', 'SAE'].includes(ambiente) || !canAccessEnvironment(actor, ambiente)) {
+    throw accessError('Ambiente inválido ou não autorizado.');
+  }
+  if (!Object.values(PROFILES).includes(payload.perfil || PROFILES.CONSULTA)) throw accessError('Perfil inválido.');
   const perfil = isMaster ? PROFILES.MASTER : payload.perfil || PROFILES.CONSULTA;
   const status = isMaster ? 'ATIVO' : payload.status || 'ATIVO';
+  if (!['ATIVO', 'INATIVO', 'BLOQUEADO'].includes(status)) throw accessError('Status inválido.');
   const setor_nome = payload.setor_nome ? String(payload.setor_nome).trim() : null;
   const senhaInicial = String(payload.senha_inicial || payload.password || '').trim();
 
@@ -244,7 +270,7 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
 
   let authUserId = null;
 
-  if (!isMaster) {
+  {
     if (senhaInicial.length < 6) {
       const error = new Error('Informe uma senha inicial com pelo menos 6 caracteres.');
       error.statusCode = 400;
@@ -279,6 +305,7 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
       perfil,
       status,
       setor_nome,
+      ambiente,
       is_master: isMaster,
       tentativas_login_falhas: 0,
     })
@@ -315,6 +342,7 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
 async function updateUser({ supabase, authAdmin, auditLog, payload, userId, req }) {
   const actor = await getCurrentActor(supabase, authAdmin);
   const targetUser = await getUserById(supabase, userId);
+  assertManagedUserAccess(actor, targetUser);
 
   assertMasterProtection({
     targetUser,
@@ -324,9 +352,18 @@ async function updateUser({ supabase, authAdmin, auditLog, payload, userId, req 
   });
 
   const nextEmail = String(payload.email || targetUser.email).trim().toLowerCase();
+  if (nextEmail !== String(targetUser.email).toLowerCase()) {
+    throw accessError('O e-mail de login não pode ser alterado neste formulário.');
+  }
+  const nextEnvironment = String(payload.ambiente || targetUser.ambiente || 'RH').toUpperCase();
+  if (!['RH', 'SAE'].includes(nextEnvironment) || !canAccessEnvironment(actor, nextEnvironment)) {
+    throw accessError('Ambiente inválido ou não autorizado.');
+  }
+  if (!Object.values(PROFILES).includes(payload.perfil || targetUser.perfil)) throw accessError('Perfil inválido.');
   const willBeMaster = isMasterEmail(nextEmail);
   const nextProfile = willBeMaster ? PROFILES.MASTER : payload.perfil || targetUser.perfil;
-  const nextStatus = willBeMaster ? 'ATIVO' : payload.status || targetUser.status;
+  const nextStatus = payload.status || targetUser.status;
+  if (!['ATIVO', 'INATIVO', 'BLOQUEADO'].includes(nextStatus)) throw accessError('Status inválido.');
   const nextSetorNome =
     payload.setor_nome === undefined
       ? targetUser.setor_nome
@@ -342,6 +379,7 @@ async function updateUser({ supabase, authAdmin, auditLog, payload, userId, req 
       perfil: nextProfile,
       status: nextStatus,
       setor_nome: nextSetorNome,
+      ambiente: nextEnvironment,
       is_master: willBeMaster,
       updated_at: new Date().toISOString(),
     })
@@ -379,8 +417,10 @@ async function updateUser({ supabase, authAdmin, auditLog, payload, userId, req 
 }
 
 async function updateUserStatus({ supabase, authAdmin, auditLog, userId, status, req }) {
+  if (!['ATIVO', 'INATIVO', 'BLOQUEADO'].includes(status)) throw accessError('Status inválido.');
   const actor = await getCurrentActor(supabase, authAdmin);
   const targetUser = await getUserById(supabase, userId);
+  assertManagedUserAccess(actor, targetUser);
 
   assertMasterProtection({
     targetUser,
@@ -419,6 +459,7 @@ async function updateUserStatus({ supabase, authAdmin, auditLog, userId, status,
 async function deleteUser({ supabase, authAdmin, auditLog, userId, req }) {
   const actor = await getCurrentActor(supabase, authAdmin);
   const targetUser = await getUserById(supabase, userId);
+  assertManagedUserAccess(actor, targetUser);
 
   assertMasterProtection({
     targetUser,
@@ -459,6 +500,7 @@ async function deleteUser({ supabase, authAdmin, auditLog, userId, req }) {
 async function resetPassword({ supabase, authAdmin, userId, newPassword, auditLog, req }) {
   const actor = await getCurrentActor(supabase, authAdmin);
   const targetUser = await getUserById(supabase, userId);
+  assertManagedUserAccess(actor, targetUser);
 
   assertMasterProtection({
     targetUser,
@@ -471,6 +513,11 @@ async function resetPassword({ supabase, authAdmin, userId, newPassword, auditLo
     throw error;
   }
 
+  if (!targetUser.auth_user_id) throw accessError('Conta sem vínculo com o login.');
+  const { data: authTarget, error: authTargetError } = await supabase.auth.admin.getUserById(targetUser.auth_user_id);
+  if (authTargetError || !authTarget?.user || String(authTarget.user.email).toLowerCase() !== String(targetUser.email).toLowerCase()) {
+    throw accessError('Conta sem vínculo válido com o login.');
+  }
   if (targetUser.auth_user_id) {
     const { error } = await supabase.auth.admin.updateUserById(targetUser.auth_user_id, {
       password: newPassword,
@@ -492,7 +539,8 @@ async function resetPassword({ supabase, authAdmin, userId, newPassword, auditLo
   return { ok: true };
 }
 
-async function listLogs(supabase, filters = {}) {
+async function listLogs(supabase, filters = {}, actor) {
+  if (!actor?.is_master) throw accessError("Logs globais são reservados aos administradores globais.");
   let query = supabase
     .from('audit_logs')
     .select('*')
