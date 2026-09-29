@@ -5,6 +5,7 @@ const ETAPAS = [
   { etapa: 'ENFERMAGEM', ordem: 2 },
   { etapa: 'PSICOLOGIA', ordem: 3 },
   { etapa: 'MEDICO', ordem: 4 },
+  { etapa: 'TERAPIA_OCUPACIONAL', ordem: 5 },
 ];
 
 function safeString(value) {
@@ -20,9 +21,11 @@ function httpError(message, statusCode = 400, details = null) {
 
 function normalizeEtapa(value) {
   const etapa = safeString(value).toUpperCase();
+
   if (!ETAPAS.some((item) => item.etapa === etapa)) {
     throw httpError('Etapa de triagem inválida.', 400);
   }
+
   return etapa;
 }
 
@@ -57,6 +60,9 @@ function mapTriagem(row, etapas = []) {
     etapaAtual: safeString(row.etapa_atual),
     resultadoObservacao: safeString(row.resultado_observacao) || null,
     concluidoEm: safeString(row.concluido_em) || null,
+    protocoloMatricula: safeString(row.protocolo_matricula) || null,
+    matriculadoEm: safeString(row.matriculado_em) || null,
+    matriculadoPor: safeString(row.matriculado_por) || null,
     createdAt: safeString(row.created_at) || null,
     updatedAt: safeString(row.updated_at) || null,
     etapas: etapas.sort((a, b) => a.ordem - b.ordem),
@@ -117,9 +123,11 @@ async function listar(supabase, filtros = {}) {
 
   if (busca) {
     triagens = triagens.filter((item) =>
-      [item.nome, item.telefone]
+      [item.nome, item.telefone, item.protocoloMatricula]
         .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(busca)),
+        .some((value) =>
+          String(value).toLowerCase().includes(busca),
+        ),
     );
   }
 
@@ -168,7 +176,9 @@ async function criar({
       .maybeSingle();
 
     if (usuarioError) throw usuarioError;
-    if (!usuario) throw httpError('Usuário vinculado não encontrado.', 404);
+    if (!usuario) {
+      throw httpError('Usuário vinculado não encontrado.', 404);
+    }
   }
 
   const { data: triagem, error: triagemError } = await supabase
@@ -179,7 +189,8 @@ async function criar({
       sexo: safeString(payload?.sexo) || null,
       data_nascimento: safeString(payload?.dataNascimento) || null,
       telefone: safeString(payload?.telefone) || null,
-      observacao_inicial: safeString(payload?.observacaoInicial) || null,
+      observacao_inicial:
+        safeString(payload?.observacaoInicial) || null,
       status: 'EM_TRIAGEM',
       etapa_atual: 'SERVICO_SOCIAL',
       created_by: nowUserId,
@@ -212,15 +223,23 @@ async function criar({
       entityType: 'sae_triagem',
       entityId: safeString(triagem.id),
       entityLabel: nome,
-      description: `Triagem criada por ${actor?.email || authUser?.email || 'usuário autenticado'}.`,
+      description: `Triagem criada por ${
+        actor?.email ||
+        authUser?.email ||
+        'usuário autenticado'
+      }.`,
       metadata: {
-        fluxo: ['SERVICO_SOCIAL', 'ENFERMAGEM', 'PSICOLOGIA', 'MEDICO'],
+        fluxo: ETAPAS.map((item) => item.etapa),
       },
     });
 
     return obter(supabase, triagem.id);
   } catch (error) {
-    await supabase.from('sae_triagens').delete().eq('id', triagem.id);
+    await supabase
+      .from('sae_triagens')
+      .delete()
+      .eq('id', triagem.id);
+
     throw error;
   }
 }
@@ -239,14 +258,28 @@ async function atualizarEtapa({
   const etapaNormalizada = normalizeEtapa(etapa);
   const status = safeString(payload?.status).toUpperCase();
 
-  if (!['PENDENTE', 'AGENDADO', 'CONCLUIDO', 'NAO_COMPARECEU'].includes(status)) {
+  if (
+    ![
+      'PENDENTE',
+      'AGENDADO',
+      'CONCLUIDO',
+      'NAO_COMPARECEU',
+    ].includes(status)
+  ) {
     throw httpError('Status da etapa inválido.', 400);
   }
 
   const triagem = await obter(supabase, id);
 
-  if (['APTO', 'NAO_APTO', 'DESISTENTE', 'MATRICULADO'].includes(triagem.status)) {
-    throw httpError('Esta triagem já possui decisão final.', 409);
+  if (
+    ['NAO_APTO', 'DESISTENTE', 'MATRICULADO'].includes(
+      triagem.status,
+    )
+  ) {
+    throw httpError(
+      'Esta triagem já possui situação final e não pode ser alterada.',
+      409,
+    );
   }
 
   const etapaAtual = triagem.etapas.find(
@@ -254,31 +287,46 @@ async function atualizarEtapa({
   );
 
   if (!etapaAtual) {
-    throw httpError('Etapa não encontrada nesta triagem.', 404);
+    throw httpError(
+      'Etapa não encontrada nesta triagem.',
+      404,
+    );
   }
 
-  const parecer = safeString(payload?.parecer).toUpperCase() || null;
+  const parecer =
+    safeString(payload?.parecer).toUpperCase() || null;
 
   if (
     parecer &&
-    !['FAVORAVEL', 'PENDENCIA', 'DESFAVORAVEL'].includes(parecer)
+    ![
+      'FAVORAVEL',
+      'PENDENCIA',
+      'DESFAVORAVEL',
+    ].includes(parecer)
   ) {
     throw httpError('Parecer inválido.', 400);
   }
 
   const patch = {
     status,
-    profissional_id: safeString(payload?.profissionalId) || null,
-    agendamento_id: safeString(payload?.agendamentoId) || null,
-    data_agendada: safeString(payload?.dataAgendada) || null,
+    profissional_id:
+      safeString(payload?.profissionalId) || null,
+    agendamento_id:
+      safeString(payload?.agendamentoId) || null,
+    data_agendada:
+      safeString(payload?.dataAgendada) || null,
     parecer,
-    observacao: safeString(payload?.observacao) || null,
+    observacao:
+      safeString(payload?.observacao) || null,
     updated_by: authUser?.id || null,
   };
 
   if (status === 'CONCLUIDO') {
     patch.data_conclusao = new Date().toISOString();
-  } else if (status === 'PENDENTE' || status === 'AGENDADO') {
+  } else if (
+    status === 'PENDENTE' ||
+    status === 'AGENDADO'
+  ) {
     patch.data_conclusao = null;
   }
 
@@ -304,7 +352,9 @@ async function atualizarEtapa({
     const primeiraPendente = atualizado.etapas.find(
       (item) => item.status !== 'CONCLUIDO',
     );
-    novaEtapa = primeiraPendente?.etapa || 'CONCLUIDA';
+
+    novaEtapa =
+      primeiraPendente?.etapa || 'CONCLUIDA';
   }
 
   const { error: triagemUpdateError } = await supabase
@@ -324,7 +374,11 @@ async function atualizarEtapa({
     entityType: 'sae_triagem',
     entityId: id,
     entityLabel: triagem.nome,
-    description: `Etapa ${etapaNormalizada} atualizada por ${actor?.email || authUser?.email || 'usuário autenticado'}.`,
+    description: `Etapa ${etapaNormalizada} atualizada por ${
+      actor?.email ||
+      authUser?.email ||
+      'usuário autenticado'
+    }.`,
     metadata: {
       etapa: etapaNormalizada,
       status,
@@ -345,13 +399,28 @@ async function decidir({
   req,
 }) {
   const id = safeString(triagemId);
-  const decisao = safeString(payload?.decisao).toUpperCase();
+  const decisao =
+    safeString(payload?.decisao).toUpperCase();
 
-  if (!['APTO', 'NAO_APTO', 'DESISTENTE'].includes(decisao)) {
-    throw httpError('Decisão de triagem inválida.', 400);
+  if (
+    !['APTO', 'NAO_APTO', 'DESISTENTE'].includes(
+      decisao,
+    )
+  ) {
+    throw httpError(
+      'Decisão de triagem inválida.',
+      400,
+    );
   }
 
   const triagem = await obter(supabase, id);
+
+  if (triagem.status === 'MATRICULADO') {
+    throw httpError(
+      'Esta triagem já foi convertida em matrícula.',
+      409,
+    );
+  }
 
   if (decisao !== 'DESISTENTE') {
     const faltantes = triagem.etapas.filter(
@@ -360,10 +429,12 @@ async function decidir({
 
     if (faltantes.length > 0) {
       throw httpError(
-        'Conclua Serviço Social, Enfermagem, Psicologia e Médico antes da decisão final.',
+        'Conclua Serviço Social, Enfermagem, Psicologia, Médico e Terapia Ocupacional antes da decisão final.',
         409,
         {
-          etapasPendentes: faltantes.map((item) => item.etapa),
+          etapasPendentes: faltantes.map(
+            (item) => item.etapa,
+          ),
         },
       );
     }
@@ -389,14 +460,135 @@ async function decidir({
     entityType: 'sae_triagem',
     entityId: id,
     entityLabel: triagem.nome,
-    description: `Triagem finalizada como ${decisao} por ${actor?.email || authUser?.email || 'usuário autenticado'}.`,
+    description: `Triagem finalizada como ${decisao} por ${
+      actor?.email ||
+      authUser?.email ||
+      'usuário autenticado'
+    }.`,
     metadata: {
       decisao,
-      observacao: safeString(payload?.observacao) || null,
+      observacao:
+        safeString(payload?.observacao) || null,
     },
   });
 
   return obter(supabase, id);
+}
+
+async function matricular({
+  supabase,
+  authUser,
+  actor,
+  auditLog,
+  triagemId,
+  payload,
+  req,
+}) {
+  const id = safeString(triagemId);
+  const turno =
+    safeString(payload?.turno).toUpperCase() || null;
+
+  if (
+    turno &&
+    !['MANHÃ', 'TARDE'].includes(turno)
+  ) {
+    throw httpError(
+      'Turno inválido. Informe MANHÃ ou TARDE.',
+      400,
+    );
+  }
+
+  const triagemAntes = await obter(supabase, id);
+
+  const faltantes = triagemAntes.etapas.filter(
+    (item) => item.status !== 'CONCLUIDO',
+  );
+
+  if (
+    triagemAntes.etapas.length !== ETAPAS.length ||
+    faltantes.length > 0
+  ) {
+    throw httpError(
+      'Conclua as cinco avaliações obrigatórias antes de emitir o protocolo e matricular.',
+      409,
+      {
+        etapasPendentes: faltantes.map(
+          (item) => item.etapa,
+        ),
+      },
+    );
+  }
+
+  const { data, error } = await supabase.rpc(
+    'sae_matricular_triagem',
+    {
+      p_triagem_id: id,
+      p_turno: turno,
+      p_observacao:
+        safeString(payload?.observacao) || null,
+      p_actor: authUser?.id || null,
+    },
+  );
+
+  if (error) {
+    throw httpError(
+      error.message ||
+        'Não foi possível gerar a matrícula.',
+      400,
+    );
+  }
+
+  const resultado =
+    Array.isArray(data) && data.length > 0
+      ? data[0]
+      : data || {};
+
+  const triagem = await obter(supabase, id);
+
+  await auditLog(req, {
+    action: 'MATRICULA_SAE_TRIAGEM',
+    module: MODULE_NAME,
+    entityType: 'sae_triagem',
+    entityId: id,
+    entityLabel: triagem.nome,
+    description: `Protocolo ${
+      triagem.protocoloMatricula || ''
+    } emitido e matrícula criada por ${
+      actor?.email ||
+      authUser?.email ||
+      'usuário autenticado'
+    }.`,
+    metadata: {
+      usuarioId:
+        safeString(resultado?.usuario_id) ||
+        triagem.usuarioId,
+      prontuario:
+        safeString(resultado?.prontuario) ||
+        null,
+      protocolo:
+        safeString(resultado?.protocolo) ||
+        triagem.protocoloMatricula,
+      turno,
+    },
+  });
+
+  return {
+    triagem,
+    matricula: {
+      usuarioId:
+        safeString(resultado?.usuario_id) ||
+        triagem.usuarioId,
+      prontuario:
+        safeString(resultado?.prontuario) ||
+        null,
+      protocolo:
+        safeString(resultado?.protocolo) ||
+        triagem.protocoloMatricula,
+      matriculadoEm:
+        safeString(resultado?.matriculado_em) ||
+        triagem.matriculadoEm,
+    },
+  };
 }
 
 module.exports = {
@@ -406,4 +598,5 @@ module.exports = {
   criar,
   atualizarEtapa,
   decidir,
+  matricular,
 };
