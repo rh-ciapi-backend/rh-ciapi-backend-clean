@@ -2,8 +2,9 @@ const MODULE_NAME = 'sae_triagem';
 
 const ETAPAS = [
   { etapa: 'SERVICO_SOCIAL', ordem: 1 },
-  { etapa: 'PSICOLOGIA', ordem: 2 },
-  { etapa: 'MEDICO', ordem: 3 },
+  { etapa: 'ENFERMAGEM', ordem: 2 },
+  { etapa: 'PSICOLOGIA', ordem: 3 },
+  { etapa: 'MEDICO', ordem: 4 },
 ];
 
 function safeString(value) {
@@ -213,7 +214,7 @@ async function criar({
       entityLabel: nome,
       description: `Triagem criada por ${actor?.email || authUser?.email || 'usuário autenticado'}.`,
       metadata: {
-        fluxo: ['SERVICO_SOCIAL', 'PSICOLOGIA', 'MEDICO'],
+        fluxo: ['SERVICO_SOCIAL', 'ENFERMAGEM', 'PSICOLOGIA', 'MEDICO'],
       },
     });
 
@@ -296,7 +297,7 @@ async function atualizarEtapa({
   let novoStatus = 'EM_TRIAGEM';
   let novaEtapa = 'SERVICO_SOCIAL';
 
-  if (concluidas.length === 3) {
+  if (concluidas.length === ETAPAS.length) {
     novoStatus = 'AGUARDANDO_DECISAO';
     novaEtapa = 'CONCLUIDA';
   } else {
@@ -359,7 +360,7 @@ async function decidir({
 
     if (faltantes.length > 0) {
       throw httpError(
-        'Conclua Serviço Social, Psicologia e Médico antes da decisão final.',
+        'Conclua Serviço Social, Enfermagem, Psicologia e Médico antes da decisão final.',
         409,
         {
           etapasPendentes: faltantes.map((item) => item.etapa),
