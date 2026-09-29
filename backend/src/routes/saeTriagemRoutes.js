@@ -159,6 +159,32 @@ router.patch(
   },
 );
 
+
+router.post(
+  '/:id/matricular',
+  requirePermission('sae_profissionais', 'editar'),
+  async (req, res, next) => {
+    try {
+      const response = await saeTriagemService.matricular({
+        supabase,
+        authUser: req.authUser,
+        actor: req.currentUser,
+        auditLog,
+        triagemId: req.params.id,
+        payload: req.body || {},
+        req,
+      });
+
+      return res.json({
+        ok: true,
+        ...response,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
 router.use((error, req, res, next) => {
   console.error('[saeTriagemRoutes]', error);
 
