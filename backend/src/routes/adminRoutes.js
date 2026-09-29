@@ -7,6 +7,8 @@ const requerimentosService = require('../services/requerimentosService');
 const portalAcessoService = require('../services/portalAcessoService');
 const { gerarRequerimentoDocx, gerarRequerimentoPdf } = require('../services/requerimentosDocxService');
 
+const { canAccessEnvironment, allowedEnvironments, assertManagedUserAccess } = require('../config/accessControl');
+
 const router = express.Router();
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, {
@@ -17,6 +19,7 @@ const auditLog = createAuditLogger(supabase);
 
 async function authenticate(req, res, next) {
   try {
+    if (req.authUser && req.currentUser) return next();
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
 
@@ -57,14 +60,43 @@ router.post('/portal/entrar', async (req, res, next) => {
 router.use(authenticate);
 
 router.get('/me', (req, res) => {
-  const { id, perfil, status, is_master: isMaster } = req.currentUser;
-  res.json({ user: { id, perfil, status, is_master: isMaster } });
+  const { id, email, perfil, status, is_master: isMaster, ambiente } = req.currentUser;
+  res.set('Cache-Control', 'no-store');
+  res.json({ user: { id, email, perfil, status, is_master: isMaster, isMaster,
+    ambiente, ambientes_permitidos: allowedEnvironments(req.currentUser) } });
+});
+
+// Os caminhos do portal mantêm seu acesso próprio; funcionários precisam ser do RH.
+router.use((req, res, next) => {
+  const actor = req.currentUser;
+  if (actor.status !== 'ATIVO') return res.status(403).json({ error: 'Usuário sem acesso ativo.' });
+  if (req.path.startsWith('/requerimentos')) {
+    req.accessEnvironment = 'RH';
+    if (actor.perfil === 'SERVIDOR_LIMITADO' && req.path !== '/requerimentos/acesso') return next();
+    if (!canAccessEnvironment(actor, 'RH')) return res.status(403).json({ error: 'Acesso reservado ao ambiente RH.' });
+    return next();
+  }
+  const requested = String(req.headers['x-ciapi-ambiente'] || req.query.ambiente || actor.ambiente || 'RH').toUpperCase();
+  if (!['RH', 'SAE'].includes(requested) || !canAccessEnvironment(actor, requested)) {
+    return res.status(403).json({ error: 'Acesso negado a este ambiente.' });
+  }
+  req.accessEnvironment = requested;
+  return next();
+});
+
+router.param('id', async (req, res, next, id) => {
+  if (!req.path.startsWith('/users/')) return next();
+  try {
+    const target = await adminUsersService.getUserById(supabase, id);
+    assertManagedUserAccess(req.currentUser, target);
+    return next();
+  } catch (error) { return next(error); }
 });
 
 router.post('/requerimentos/acesso', async (req, res, next) => {
   try {
     if (!req.currentUser.is_master &&
-      !['ADMINISTRADOR', 'RH'].includes(req.currentUser.perfil)) {
+      !['MASTER', 'ADMINISTRADOR', 'RH'].includes(req.currentUser.perfil)) {
       return res.status(403).json({ error: 'Acesso reservado à administração.' });
     }
     if (req.currentUser.status !== 'ATIVO') {
@@ -91,8 +123,8 @@ function acessoRequerimentos(acao) {
     if (usuario.is_master) return next();
 
     const perfis = acao === 'criar'
-      ? ['ADMINISTRADOR', 'RH', 'SERVIDOR_LIMITADO']
-      : ['ADMINISTRADOR', 'RH', 'GESTOR', 'CONSULTA', 'SERVIDOR_LIMITADO'];
+      ? ['MASTER', 'ADMINISTRADOR', 'RH', 'SERVIDOR_LIMITADO']
+      : ['MASTER', 'ADMINISTRADOR', 'RH', 'GESTOR', 'CONSULTA', 'SERVIDOR_LIMITADO'];
 
     if (!perfis.includes(usuario.perfil)) {
       return res.status(403).json({ error: 'Acesso negado aos requerimentos.' });
@@ -144,7 +176,7 @@ router.post('/requerimentos', acessoRequerimentos('criar'), async (req, res, nex
 
 router.patch('/requerimentos/:id/arquivar', acessoRequerimentos('criar'), async (req, res, next) => {
   try {
-    if (!req.currentUser.is_master && !['ADMINISTRADOR', 'RH'].includes(req.currentUser.perfil)) {
+    if (!req.currentUser.is_master && !['MASTER', 'ADMINISTRADOR', 'RH'].includes(req.currentUser.perfil)) {
       return res.status(403).json({ error: 'Acesso reservado à administração.' });
     }
     await requerimentosService.arquivar({ supabase, requerimentoId: req.params.id });
@@ -191,7 +223,8 @@ router.get('/users', requirePermission('administracao', 'visualizar'), async (re
       perfil: req.query.perfil,
       setorNome: req.query.setorNome,
       status: req.query.status,
-    });
+      ambiente: req.query.ambiente ? String(req.query.ambiente).toUpperCase() : undefined,
+    }, req.currentUser);
     res.json(response);
   } catch (error) {
     next(error);
@@ -300,7 +333,7 @@ router.get('/logs', requirePermission('administracao', 'visualizar'), async (req
       module: req.query.module,
       action: req.query.action,
       limit: req.query.limit,
-    });
+    }, req.currentUser);
     res.json(response);
   } catch (error) {
     next(error);
