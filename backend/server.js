@@ -5,6 +5,9 @@ const path = require("path");
 const fs = require("fs");
 const { createClient } = require("@supabase/supabase-js");
 const adminUsersService = require("./src/services/adminUsersService");
+const { requireEnvironment } = require("./src/middleware/requireEnvironment");
+const { assertManagedUserAccess } = require("./src/config/accessControl");
+const { requirePermission } = require("./src/middleware/requirePermission");
 
 dotenv.config();
 
@@ -214,38 +217,42 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// O ambiente vem da rota, nunca do corpo enviado pelo cliente.
+app.use(["/api/servidores", "/api/frequencia", "/api/ferias", "/api/mapas", "/api/eventos", "/api/atestados", "/api/escala"], requireEnvironment(supabase, "RH"));
+app.use("/api/sae", requireEnvironment(supabase, "SAE"));
+
+// Evita que a associação de profissionais do SAE exponha contas do RH ou contas globais.
+app.get("/api/sae/profissionais/usuarios-sistema", requirePermission("sae_profissionais", "visualizar"), async (req, res, next) => {
+  try {
+    const { users } = await adminUsersService.listUsers(supabase, {}, req.currentUser);
+    const { data: profissionais, error } = await supabase.from("sae_profissionais")
+      .select("id,nome,auth_user_id").not("auth_user_id", "is", null);
+    if (error) throw error;
+    const vinculos = new Map((profissionais || []).map((p) => [p.auth_user_id, p]));
+    return res.json({ usuarios: users.filter((u) => u.auth_user_id).map((u) => ({
+      id: u.id, authUserId: u.auth_user_id, nomeCompleto: u.nome_completo,
+      email: u.email, perfil: u.perfil, status: u.status, setorNome: u.setor_nome,
+      vinculadoProfissionalId: vinculos.get(u.auth_user_id)?.id || null,
+      vinculadoProfissionalNome: vinculos.get(u.auth_user_id)?.nome || null,
+    })) });
+  } catch (error) { return next(error); }
+});
+app.patch("/api/sae/profissionais/:id/usuario-sistema", requirePermission("sae_profissionais", "editar"), async (req, res, next) => {
+  if (!req.body?.authUserId) return next();
+  try {
+    const { data: target, error } = await supabase.from("system_users").select("*")
+      .eq("auth_user_id", String(req.body.authUserId)).maybeSingle();
+    if (error) throw error;
+    if (!target) return res.status(404).json({ error: "Conta de usuário não encontrada." });
+    assertManagedUserAccess(req.currentUser, target);
+    return next();
+  } catch (error) { return next(error); }
+});
+
+
 app.get("/api/servidores", async (req, res) => {
   try {
-    const token = String(
-      req.headers.authorization || ""
-    )
-      .replace(/^Bearer\s+/i, "")
-      .trim();
-
-    if (!token) {
-      return res.status(401).json({
-        ok: false,
-        error: "Token ausente.",
-      });
-    }
-
-    const {
-      data: auth,
-      error: authError,
-    } = await supabase.auth.getUser(token);
-
-    if (authError || !auth?.user) {
-      return res.status(401).json({
-        ok: false,
-        error: "Token inválido.",
-      });
-    }
-
-    const actor =
-      await adminUsersService.getCurrentActor(
-        supabase,
-        auth.user
-      );
+    const actor = req.currentUser;
 
     const perfisAutorizados = [
       "MASTER",
