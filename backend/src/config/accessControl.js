@@ -1,4 +1,5 @@
 const MASTER_EMAIL = 'joabbys@hotmail.com';
+const GLOBAL_MASTER_EMAILS = ['joabbys@hotmail.com', 'redeciapi@gmail.com'];
 
 const PROFILES = {
   MASTER: 'MASTER',
@@ -142,46 +143,46 @@ function normalizePermissions(permissions = [], profile = PROFILES.CONSULTA) {
 }
 
 function isMasterEmail(email = '') {
-  return String(email).trim().toLowerCase() === MASTER_EMAIL.toLowerCase();
+  return GLOBAL_MASTER_EMAILS.includes(String(email).trim().toLowerCase());
 }
 
-function assertMasterProtection({
-  targetUser,
-  actorUser,
-  requestedProfile,
-  requestedStatus,
-  allowDelete = false,
-}) {
-  if (!targetUser?.is_master) return;
+function accessError(message) {
+  const error = new Error(message);
+  error.statusCode = 403;
+  return error;
+}
 
-  if (!actorUser?.is_master) {
-    if (allowDelete) {
-      const error = new Error('O usuário master não pode ser excluído por administradores comuns.');
-      error.statusCode = 403;
-      throw error;
-    }
+function allowedEnvironments(user) {
+  if (!user || user.status !== 'ATIVO') return [];
+  if (user.is_master && isMasterEmail(user.email)) return ['RH', 'SAE'];
+  if (!user.id || user.perfil === PROFILES.SERVIDOR_LIMITADO) return [];
+  return ['RH', 'SAE'].includes(user.ambiente) ? [user.ambiente] : [];
+}
 
-    if (requestedProfile && requestedProfile !== PROFILES.MASTER) {
-      const error = new Error('Não é permitido reduzir o perfil do usuário master.');
-      error.statusCode = 403;
-      throw error;
-    }
+function canAccessEnvironment(user, environment) {
+  return allowedEnvironments(user).includes(String(environment).toUpperCase());
+}
 
-    if (requestedStatus && requestedStatus !== 'ATIVO') {
-      const error = new Error('Não é permitido inativar ou bloquear o usuário master.');
-      error.statusCode = 403;
-      throw error;
-    }
+function assertManagedUserAccess(actor, target) {
+  if (!actor || actor.status !== 'ATIVO') throw accessError('Usuário sem acesso ativo.');
+  if (actor.is_master && isMasterEmail(actor.email)) return;
+  if (isMasterEmail(target.email) || !canAccessEnvironment(actor, target.ambiente)) {
+    throw accessError('Você pode gerenciar apenas usuários do seu ambiente.');
+  }
+}
+
+function assertMasterProtection({ targetUser, actorUser, requestedProfile, requestedStatus, allowDelete = false }) {
+  if (!isMasterEmail(targetUser?.email)) return;
+  if (!actorUser?.is_master || !isMasterEmail(actorUser.email)) {
+    throw accessError('Conta global protegida. Acesso reservado aos administradores globais.');
+  }
+  if (allowDelete || (requestedProfile && requestedProfile !== PROFILES.MASTER)) {
+    throw accessError('Uma conta global não pode ser excluída ou ter seu perfil reduzido.');
   }
 }
 
 module.exports = {
-  MASTER_EMAIL,
-  PROFILES,
-  PERMISSION_MODULES,
-  PERMISSION_ACTIONS,
-  buildDefaultPermissions,
-  normalizePermissions,
-  isMasterEmail,
-  assertMasterProtection,
+  MASTER_EMAIL, GLOBAL_MASTER_EMAILS, PROFILES, PERMISSION_MODULES, PERMISSION_ACTIONS,
+  buildDefaultPermissions, normalizePermissions, isMasterEmail, assertMasterProtection,
+  allowedEnvironments, canAccessEnvironment, assertManagedUserAccess, accessError,
 };
