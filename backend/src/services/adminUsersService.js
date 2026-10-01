@@ -374,8 +374,7 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
     .from('system_users')
     .insert({
       auth_user_id: authUserId,
-      auth_reutilizado: reusedExistingAuth,
-      nome_completo: payload.nome_completo,
+nome_completo: payload.nome_completo,
       email,
       perfil,
       status,
@@ -410,6 +409,7 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
       status,
       setor_nome,
       auth_user_id: authUserId,
+      auth_reutilizado: reusedExistingAuth,
     },
   });
 
