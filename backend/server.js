@@ -180,6 +180,11 @@ const saeTriagemRoutes = safeRequire(
   "saeTriagemRoutes"
 );
 
+const saeDocumentosRoutes = safeRequire(
+  "./src/routes/saeDocumentosRoutes",
+  "saeDocumentosRoutes"
+);
+
 app.get("/", (_req, res) => {
   return res
     .status(200)
@@ -213,6 +218,7 @@ app.get("/health", (_req, res) => {
         saeAgendamentosRoutes
       ),
       saeTriagem: Boolean(saeTriagemRoutes),
+      saeDocumentos: Boolean(saeDocumentosRoutes),
     },
   });
 });
@@ -526,5 +532,9 @@ app.listen(PORT, () => {
 
   console.log(
     "SAE Triagem: GET /api/sae/triagem"
+  );
+
+  console.log(
+    "SAE Documentos: GET /api/sae/documentos/contexto"
   );
 });
