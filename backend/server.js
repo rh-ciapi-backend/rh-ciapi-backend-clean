@@ -430,6 +430,17 @@ if (saeTriagemRoutes) {
   );
 }
 
+if (saeDocumentosRoutes) {
+  app.use(
+    "/api/sae/documentos",
+    saeDocumentosRoutes
+  );
+} else {
+  console.warn(
+    "[BOOT] Rotas de documentos do SAE não registradas."
+  );
+}
+
 app.use((req, res) => {
   return res.status(404).json({
     ok: false,
