@@ -1,17 +1,10 @@
-const MODULE_NAME = 'sae_profissionais';
+const fs = require('fs');
+const path = require('path');
+const PizZip = require('pizzip');
+const Docxtemplater = require('docxtemplater');
 
 function safeString(value) {
   return String(value ?? '').trim();
-}
-
-function uniqueStrings(values) {
-  return Array.from(
-    new Set(
-      (Array.isArray(values) ? values : [])
-        .map((value) => safeString(value))
-        .filter(Boolean),
-    ),
-  );
 }
 
 function createHttpError(message, statusCode = 400) {
@@ -20,545 +13,259 @@ function createHttpError(message, statusCode = 400) {
   return error;
 }
 
-function normalizeServico(row) {
-  return {
-    id: safeString(row.id),
-    nome: safeString(row.nome),
-    sigla: safeString(row.sigla) || null,
-    ativo: Boolean(row.ativo),
-  };
-}
-
-function normalizeProfissional(row, servicoIds = []) {
-  return {
-    id: safeString(row.id),
-    authUserId: safeString(row.auth_user_id) || null,
-    nome: safeString(row.nome),
-    registroProfissional: safeString(row.registro_profissional) || null,
-    conselho: safeString(row.conselho) || null,
-    cargoFuncao: safeString(row.cargo_funcao) || null,
-    telefone: safeString(row.telefone) || null,
-    email: safeString(row.email) || null,
-    ativo: Boolean(row.ativo),
-    servicoIds: uniqueStrings(servicoIds),
-    createdAt: row.created_at || null,
-    updatedAt: row.updated_at || null,
-  };
-}
-
-async function listarServicos(supabase) {
-  const { data, error } = await supabase
-    .from('sae_servicos')
-    .select('id,nome,sigla,ativo')
-    .order('nome', { ascending: true });
-
-  if (error) throw error;
-
-  return (data || []).map(normalizeServico);
-}
-
-async function listarVinculos(supabase) {
-  const { data, error } = await supabase
-    .from('sae_profissional_servicos')
-    .select('id,profissional_id,servico_id,ativo');
-
-  if (error) throw error;
-
-  return data || [];
-}
-
-async function listarProfissionais(supabase) {
-  const [profissionaisResponse, servicos, vinculos] = await Promise.all([
-    supabase
-      .from('sae_profissionais')
-      .select('*')
-      .order('nome', { ascending: true }),
-    listarServicos(supabase),
-    listarVinculos(supabase),
-  ]);
-
-  if (profissionaisResponse.error) {
-    throw profissionaisResponse.error;
-  }
-
-  const servicosPorProfissional = new Map();
-
-  for (const vinculo of vinculos) {
-    if (!vinculo.ativo) continue;
-
-    const profissionalId = safeString(vinculo.profissional_id);
-    const servicoId = safeString(vinculo.servico_id);
-
-    if (!profissionalId || !servicoId) continue;
-
-    const lista = servicosPorProfissional.get(profissionalId) || [];
-    lista.push(servicoId);
-    servicosPorProfissional.set(profissionalId, lista);
-  }
-
-  const profissionais = (profissionaisResponse.data || []).map((row) =>
-    normalizeProfissional(
-      row,
-      servicosPorProfissional.get(safeString(row.id)) || [],
-    ),
+function slugify(value) {
+  return (
+    safeString(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '') || 'mapa'
   );
-
-  return { profissionais, servicos };
 }
 
-async function obterProfissionalPorId(supabase, profissionalId) {
-  const id = safeString(profissionalId);
+function formatDatePt(value) {
+  const text = safeString(value);
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : text;
+}
 
-  if (!id) {
-    throw createHttpError('Profissional inválido.', 400);
+function getDateValue(row) {
+  return (
+    safeString(row.data) ||
+    safeString(row.data_atendimento) ||
+    safeString(row.atendido_em).slice(0, 10) ||
+    safeString(row.created_at).slice(0, 10)
+  );
+}
+
+function getObservation(row) {
+  return (
+    safeString(row.observacao) ||
+    safeString(row.evolucao) ||
+    safeString(row.descricao) ||
+    safeString(row.registro) ||
+    ''
+  );
+}
+
+async function getProfessionalByAuthUser(supabase, authUserId) {
+  const id = safeString(authUserId);
+  if (!id) return null;
+
+  const { data, error } = await supabase
+    .from('sae_profissionais')
+    .select('id,auth_user_id,nome,cargo_funcao,registro_profissional,conselho,ativo')
+    .eq('auth_user_id', id)
+    .limit(2);
+
+  if (error) throw error;
+  const rows = data || [];
+  if (!rows.length) return null;
+  if (rows.length > 1) {
+    throw createHttpError('Este login está vinculado a mais de um profissional do SAE.', 409);
   }
 
-  const [profissionalResponse, vinculosResponse] = await Promise.all([
-    supabase
-      .from('sae_profissionais')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle(),
-    supabase
-      .from('sae_profissional_servicos')
-      .select('servico_id,ativo')
-      .eq('profissional_id', id),
-  ]);
+  const profissional = rows[0];
 
-  if (profissionalResponse.error) throw profissionalResponse.error;
-  if (vinculosResponse.error) throw vinculosResponse.error;
+  const { data: vinculos, error: vinculosError } = await supabase
+    .from('sae_profissional_servicos')
+    .select('servico_id,ativo')
+    .eq('profissional_id', profissional.id)
+    .eq('ativo', true);
 
-  if (!profissionalResponse.data) {
-    throw createHttpError('Profissional não encontrado.', 404);
-  }
+  if (vinculosError) throw vinculosError;
 
-  const servicoIds = (vinculosResponse.data || [])
-    .filter((item) => item.ativo)
+  const servicoIds = (vinculos || [])
     .map((item) => safeString(item.servico_id))
     .filter(Boolean);
 
-  return normalizeProfissional(profissionalResponse.data, servicoIds);
-}
+  let servicos = [];
+  if (servicoIds.length) {
+    const { data: servicosData, error: servicosError } = await supabase
+      .from('sae_servicos')
+      .select('id,nome,sigla,ativo')
+      .in('id', servicoIds)
+      .eq('ativo', true)
+      .order('nome', { ascending: true });
 
-async function validarServicos(supabase, servicoIds) {
-  const ids = uniqueStrings(servicoIds);
-
-  if (ids.length === 0) {
-    return ids;
-  }
-
-  const { data, error } = await supabase
-    .from('sae_servicos')
-    .select('id')
-    .in('id', ids);
-
-  if (error) throw error;
-
-  const encontrados = new Set((data || []).map((item) => safeString(item.id)));
-  const invalidos = ids.filter((id) => !encontrados.has(id));
-
-  if (invalidos.length > 0) {
-    throw createHttpError('Um ou mais serviços informados não existem.', 400);
-  }
-
-  return ids;
-}
-
-function buildCreatePayload(payload, authUserId) {
-  const nome = safeString(payload?.nome);
-
-  if (!nome) {
-    throw createHttpError('Informe o nome do profissional.', 400);
+    if (servicosError) throw servicosError;
+    servicos = servicosData || [];
   }
 
   return {
-    nome,
-    registro_profissional: safeString(payload?.registroProfissional) || null,
-    conselho: safeString(payload?.conselho) || null,
-    cargo_funcao: safeString(payload?.cargoFuncao) || null,
-    telefone: safeString(payload?.telefone) || null,
-    email: safeString(payload?.email) || null,
-    ativo: payload?.ativo !== false,
-    created_by: authUserId || null,
-    updated_by: authUserId || null,
+    id: safeString(profissional.id),
+    nome: safeString(profissional.nome),
+    cargoFuncao: safeString(profissional.cargo_funcao),
+    registroProfissional: safeString(profissional.registro_profissional),
+    conselho: safeString(profissional.conselho),
+    ativo: Boolean(profissional.ativo),
+    servicos: servicos.map((item) => ({
+      id: safeString(item.id),
+      nome: safeString(item.nome),
+      sigla: safeString(item.sigla),
+    })),
   };
 }
 
-function buildUpdatePayload(payload, atual, authUserId) {
-  const nome = safeString(payload?.nome ?? atual.nome);
-
-  if (!nome) {
-    throw createHttpError('Informe o nome do profissional.', 400);
-  }
-
-  return {
-    nome,
-    registro_profissional:
-      payload?.registroProfissional === undefined
-        ? atual.registroProfissional
-        : safeString(payload.registroProfissional) || null,
-    conselho:
-      payload?.conselho === undefined
-        ? atual.conselho
-        : safeString(payload.conselho) || null,
-    cargo_funcao:
-      payload?.cargoFuncao === undefined
-        ? atual.cargoFuncao
-        : safeString(payload.cargoFuncao) || null,
-    telefone:
-      payload?.telefone === undefined
-        ? atual.telefone
-        : safeString(payload.telefone) || null,
-    email:
-      payload?.email === undefined
-        ? atual.email
-        : safeString(payload.email) || null,
-    ativo:
-      typeof payload?.ativo === 'boolean' ? payload.ativo : atual.ativo,
-    updated_at: new Date().toISOString(),
-    updated_by: authUserId || null,
-  };
-}
-
-async function sincronizarServicos(supabase, profissionalId, servicoIds) {
-  const desejados = new Set(uniqueStrings(servicoIds));
-
-  const { data: existentes, error: existentesError } = await supabase
-    .from('sae_profissional_servicos')
-    .select('id,servico_id,ativo')
-    .eq('profissional_id', profissionalId);
-
-  if (existentesError) throw existentesError;
-
-  const agora = new Date().toISOString();
-
-  if (desejados.size > 0) {
-    const payload = Array.from(desejados).map((servicoId) => ({
-      profissional_id: profissionalId,
-      servico_id: servicoId,
-      ativo: true,
-      updated_at: agora,
-    }));
-
-    const { error } = await supabase
-      .from('sae_profissional_servicos')
-      .upsert(payload, { onConflict: 'profissional_id,servico_id' });
-
-    if (error) throw error;
-  }
-
-  const desativarIds = (existentes || [])
-    .filter((item) => !desejados.has(safeString(item.servico_id)) && item.ativo)
-    .map((item) => safeString(item.id))
-    .filter(Boolean);
-
-  if (desativarIds.length > 0) {
-    const { error } = await supabase
-      .from('sae_profissional_servicos')
-      .update({ ativo: false, updated_at: agora })
-      .in('id', desativarIds);
-
-    if (error) throw error;
-  }
-}
-
-async function createProfissional({ supabase, authUser, actor, auditLog, payload, req }) {
-  const servicoIds = await validarServicos(supabase, payload?.servicoIds);
-  const profissionalPayload = buildCreatePayload(payload, authUser?.id);
-
-  const { data, error } = await supabase
-    .from('sae_profissionais')
-    .insert(profissionalPayload)
-    .select('*')
-    .single();
-
-  if (error) throw error;
-
-  try {
-    await sincronizarServicos(supabase, data.id, servicoIds);
-  } catch (errorSync) {
-    await supabase.from('sae_profissionais').delete().eq('id', data.id);
-    throw errorSync;
-  }
-
-  const profissional = await obterProfissionalPorId(supabase, data.id);
-
-  await auditLog(req, {
-    action: 'CREATE_SAE_PROFISSIONAL',
-    module: MODULE_NAME,
-    entityType: 'sae_profissional',
-    entityId: profissional.id,
-    entityLabel: profissional.nome,
-    description: `Profissional ${profissional.nome} criado por ${actor?.email || authUser?.email || 'usuário autenticado'}.`,
-    metadata: {
-      ativo: profissional.ativo,
-      servico_ids: profissional.servicoIds,
-    },
-  });
-
-  return profissional;
-}
-
-async function updateProfissional({ supabase, authUser, actor, auditLog, profissionalId, payload, req }) {
-  const atual = await obterProfissionalPorId(supabase, profissionalId);
-  const servicoIds =
-    payload?.servicoIds === undefined
-      ? atual.servicoIds
-      : await validarServicos(supabase, payload.servicoIds);
-
-  const updatePayload = buildUpdatePayload(payload, atual, authUser?.id);
-
-  const { error } = await supabase
-    .from('sae_profissionais')
-    .update(updatePayload)
-    .eq('id', atual.id);
-
-  if (error) throw error;
-
-  await sincronizarServicos(supabase, atual.id, servicoIds);
-
-  const profissional = await obterProfissionalPorId(supabase, atual.id);
-
-  await auditLog(req, {
-    action: 'UPDATE_SAE_PROFISSIONAL',
-    module: MODULE_NAME,
-    entityType: 'sae_profissional',
-    entityId: profissional.id,
-    entityLabel: profissional.nome,
-    description: `Profissional ${profissional.nome} atualizado por ${actor?.email || authUser?.email || 'usuário autenticado'}.`,
-    metadata: {
-      ativo_anterior: atual.ativo,
-      ativo_atual: profissional.ativo,
-      servicos_anteriores: atual.servicoIds,
-      servicos_atuais: profissional.servicoIds,
-    },
-  });
-
-  return profissional;
-}
-
-async function updateProfissionalStatus({ supabase, authUser, actor, auditLog, profissionalId, ativo, req }) {
-  if (typeof ativo !== 'boolean') {
-    throw createHttpError('Informe um status válido para o profissional.', 400);
-  }
-
-  const atual = await obterProfissionalPorId(supabase, profissionalId);
-
-  const { error } = await supabase
-    .from('sae_profissionais')
-    .update({
-      ativo,
-      updated_at: new Date().toISOString(),
-      updated_by: authUser?.id || null,
-    })
-    .eq('id', atual.id);
-
-  if (error) throw error;
-
-  const profissional = await obterProfissionalPorId(supabase, atual.id);
-
-  await auditLog(req, {
-    action: 'UPDATE_SAE_PROFISSIONAL_STATUS',
-    module: MODULE_NAME,
-    entityType: 'sae_profissional',
-    entityId: profissional.id,
-    entityLabel: profissional.nome,
-    description: `Profissional ${profissional.nome} ${ativo ? 'ativado' : 'inativado'} por ${actor?.email || authUser?.email || 'usuário autenticado'}.`,
-    metadata: {
-      ativo_anterior: atual.ativo,
-      ativo_atual: ativo,
-    },
-  });
-
-  return profissional;
-}
-
-
-async function listarUsuariosSistema(supabase) {
-  const [usuariosResponse, profissionaisResponse] = await Promise.all([
-    supabase
-      .from('system_users')
-      .select('id,auth_user_id,nome_completo,email,perfil,status,setor_nome')
-      .not('auth_user_id', 'is', null)
-      .order('nome_completo', { ascending: true }),
-    supabase
-      .from('sae_profissionais')
-      .select('id,nome,auth_user_id')
-      .not('auth_user_id', 'is', null),
-  ]);
-
-  if (usuariosResponse.error) throw usuariosResponse.error;
-  if (profissionaisResponse.error) throw profissionaisResponse.error;
-
-  const vinculos = new Map(
-    (profissionaisResponse.data || [])
-      .filter((item) => safeString(item.auth_user_id))
-      .map((item) => [
-        safeString(item.auth_user_id),
-        {
-          profissionalId: safeString(item.id),
-          profissionalNome: safeString(item.nome),
-        },
-      ]),
-  );
-
-  return (usuariosResponse.data || []).map((row) => {
-    const authUserId = safeString(row.auth_user_id);
-    const vinculo = vinculos.get(authUserId);
-
-    return {
-      id: safeString(row.id),
-      authUserId,
-      nomeCompleto: safeString(row.nome_completo),
-      email: safeString(row.email),
-      perfil: safeString(row.perfil) || null,
-      status: safeString(row.status) || null,
-      setorNome: safeString(row.setor_nome) || null,
-      vinculadoProfissionalId: vinculo?.profissionalId || null,
-      vinculadoProfissionalNome: vinculo?.profissionalNome || null,
-    };
-  });
-}
-
-async function vincularUsuarioSistema({
-  supabase,
-  authUser,
-  actor,
-  auditLog,
-  profissionalId,
-  authUserId,
-  req,
-}) {
-  const atual = await obterProfissionalPorId(supabase, profissionalId);
-  const nextAuthUserId = safeString(authUserId) || null;
-
-  let usuarioSistema = null;
-
-  if (nextAuthUserId) {
-    const { data: usuario, error: usuarioError } = await supabase
-      .from('system_users')
-      .select('id,auth_user_id,nome_completo,email,status')
-      .eq('auth_user_id', nextAuthUserId)
-      .maybeSingle();
-
-    if (usuarioError) throw usuarioError;
-
-    if (!usuario) {
-      throw createHttpError(
-        'A conta selecionada não foi encontrada entre os usuários do sistema.',
-        404,
-      );
-    }
-
-    const { data: conflito, error: conflitoError } = await supabase
-      .from('sae_profissionais')
-      .select('id,nome')
-      .eq('auth_user_id', nextAuthUserId)
-      .neq('id', atual.id)
-      .maybeSingle();
-
-    if (conflitoError) throw conflitoError;
-
-    if (conflito) {
-      throw createHttpError(
-        `Esta conta já está vinculada ao profissional ${safeString(conflito.nome) || 'informado'}.`,
-        409,
-      );
-    }
-
-    usuarioSistema = usuario;
-  }
-
-  const { error } = await supabase
-    .from('sae_profissionais')
-    .update({
-      auth_user_id: nextAuthUserId,
-      updated_at: new Date().toISOString(),
-      updated_by: authUser?.id || null,
-    })
-    .eq('id', atual.id);
-
-  if (error) throw error;
-
-  const profissional = await obterProfissionalPorId(supabase, atual.id);
-
-  await auditLog(req, {
-    action: nextAuthUserId
-      ? 'LINK_SAE_PROFISSIONAL_SYSTEM_USER'
-      : 'UNLINK_SAE_PROFISSIONAL_SYSTEM_USER',
-    module: MODULE_NAME,
-    entityType: 'sae_profissional',
-    entityId: profissional.id,
-    entityLabel: profissional.nome,
-    description: nextAuthUserId
-      ? `Conta ${safeString(usuarioSistema?.email) || nextAuthUserId} vinculada ao profissional ${profissional.nome} por ${actor?.email || authUser?.email || 'usuário autenticado'}.`
-      : `Conta do sistema desvinculada do profissional ${profissional.nome} por ${actor?.email || authUser?.email || 'usuário autenticado'}.`,
-    metadata: {
-      auth_user_id_anterior: atual.authUserId || null,
-      auth_user_id_atual: profissional.authUserId || null,
-      system_user_id: safeString(usuarioSistema?.id) || null,
-      system_user_email: safeString(usuarioSistema?.email) || null,
-    },
-  });
-
-  return profissional;
-}
-
-async function countReferences(supabase, tableName, profissionalId) {
-  const { count, error } = await supabase
-    .from(tableName)
-    .select('id', { count: 'exact', head: true })
-    .eq('profissional_id', profissionalId);
-
-  if (error) throw error;
-  return Number(count || 0);
-}
-
-async function deleteProfissional({ supabase, actor, auditLog, profissionalId, req }) {
-  const atual = await obterProfissionalPorId(supabase, profissionalId);
-
-  const [agendamentos, agenda, bloqueios] = await Promise.all([
-    countReferences(supabase, 'sae_agendamento_servicos', atual.id),
-    countReferences(supabase, 'sae_agenda_profissionais', atual.id),
-    countReferences(supabase, 'sae_bloqueios_agenda', atual.id),
-  ]);
-
-  if (agendamentos > 0 || agenda > 0 || bloqueios > 0) {
+async function listar({ supabase, authUser, mes, ano, servicoId }) {
+  const profissional = await getProfessionalByAuthUser(supabase, authUser?.id);
+  if (!profissional || !profissional.ativo) {
     throw createHttpError(
-      'Este profissional possui histórico ou configuração de agenda vinculada. Inative o cadastro em vez de excluí-lo.',
-      409,
+      'Seu login precisa estar vinculado a um profissional ativo para acessar o mapa.',
+      403,
     );
   }
 
-  const { error } = await supabase
-    .from('sae_profissionais')
-    .delete()
-    .eq('id', atual.id);
+  const safeAno = Number(ano);
+  const safeMes = Number(mes);
+  if (!Number.isInteger(safeAno) || safeAno < 2000 || safeAno > 2100) {
+    throw createHttpError('Ano inválido.', 400);
+  }
+  if (!Number.isInteger(safeMes) || safeMes < 1 || safeMes > 12) {
+    throw createHttpError('Mês inválido.', 400);
+  }
 
+  let query = supabase
+    .from('sae_atendimentos')
+    .select('*')
+    .eq('profissional_id', profissional.id);
+
+  if (servicoId) {
+    query = query.eq('servico_id', safeString(servicoId));
+  }
+
+  const { data: atendimentosData, error } = await query;
   if (error) throw error;
 
-  await auditLog(req, {
-    action: 'DELETE_SAE_PROFISSIONAL',
-    module: MODULE_NAME,
-    entityType: 'sae_profissional',
-    entityId: atual.id,
-    entityLabel: atual.nome,
-    description: `Profissional ${atual.nome} excluído por ${actor?.email || 'usuário autenticado'}.`,
-    metadata: {
-      servico_ids: atual.servicoIds,
-    },
+  const rows = (atendimentosData || []).filter((row) => {
+    const date = getDateValue(row);
+    const match = date.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return match && Number(match[1]) === safeAno && Number(match[2]) === safeMes;
   });
 
-  return { ok: true };
+  const usuarioIds = Array.from(
+    new Set(rows.map((row) => safeString(row.usuario_id)).filter(Boolean)),
+  );
+
+  let usuarios = [];
+  if (usuarioIds.length) {
+    const { data, error: usuariosError } = await supabase
+      .from('sae_usuarios_resumo')
+      .select('id,prontuario,nome,sexo,data_nascimento,idade,turno')
+      .in('id', usuarioIds);
+
+    if (usuariosError) throw usuariosError;
+    usuarios = data || [];
+  }
+
+  const usuariosMap = new Map(
+    usuarios.map((item) => [safeString(item.id), item]),
+  );
+
+  const itens = rows
+    .map((row) => {
+      const usuario = usuariosMap.get(safeString(row.usuario_id)) || {};
+      return {
+        id: safeString(row.id),
+        data: getDateValue(row),
+        prontuario: safeString(usuario.prontuario),
+        nome: safeString(usuario.nome) || safeString(row.nome_usuario) || 'Não informado',
+        sexo: safeString(usuario.sexo),
+        idade:
+          usuario.idade == null
+            ? ''
+            : String(usuario.idade),
+        turno: safeString(usuario.turno),
+        observacao: getObservation(row),
+        servicoId: safeString(row.servico_id),
+      };
+    })
+    .sort((a, b) => a.data.localeCompare(b.data) || a.nome.localeCompare(b.nome));
+
+  const turnos = Array.from(new Set(itens.map((item) => item.turno).filter(Boolean)));
+
+  return {
+    profissional,
+    mes: safeMes,
+    ano: safeAno,
+    servicoId: safeString(servicoId) || null,
+    turno: turnos.length === 1 ? turnos[0] : turnos.length > 1 ? 'MISTO' : '',
+    total: itens.length,
+    itens,
+  };
+}
+
+async function gerarDocx({ supabase, authUser, mes, ano, servicoId }) {
+  const mapa = await listar({ supabase, authUser, mes, ano, servicoId });
+
+  const templateCandidates = [
+    path.join(__dirname, '..', 'templates', 'sae', 'mapa_atendimento_profissional.docx'),
+    path.join(process.cwd(), 'src', 'templates', 'sae', 'mapa_atendimento_profissional.docx'),
+    path.join(process.cwd(), 'backend', 'src', 'templates', 'sae', 'mapa_atendimento_profissional.docx'),
+  ];
+
+  const templatePath = templateCandidates.find((candidate) => fs.existsSync(candidate));
+  if (!templatePath) {
+    throw createHttpError(
+      `Template do Mapa de Atendimento não encontrado. Caminhos verificados: ${templateCandidates.join(' | ')}`,
+      500,
+    );
+  }
+
+  const servico =
+    mapa.profissional.servicos.find((item) => item.id === mapa.servicoId) ||
+    mapa.profissional.servicos[0] ||
+    {};
+
+  const meses = [
+    '', 'JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO',
+    'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO',
+  ];
+
+  const context = {
+    SETOR: safeString(servico.nome) || 'SAE',
+    PROFISSIONAL: mapa.profissional.nome,
+    TURNO: mapa.turno || '',
+    MES: meses[mapa.mes] || String(mapa.mes),
+    ANO: String(mapa.ano),
+  };
+
+  for (let i = 1; i <= 28; i += 1) {
+    const item = mapa.itens[i - 1] || {};
+    context[`DATA_${i}`] = formatDatePt(item.data);
+    context[`PRONTUARIO_${i}`] = safeString(item.prontuario);
+    context[`NOME_${i}`] = safeString(item.nome);
+    context[`SEXO_${i}`] = safeString(item.sexo);
+    context[`IDADE_${i}`] = safeString(item.idade);
+    context[`OBSERVACAO_${i}`] = safeString(item.observacao);
+  }
+
+  const binary = fs.readFileSync(templatePath, 'binary');
+  const zip = new PizZip(binary);
+  const doc = new Docxtemplater(zip, {
+    paragraphLoop: true,
+    linebreaks: true,
+    nullGetter() {
+      return '';
+    },
+  });
+  doc.render(context);
+
+  const buffer = doc.getZip().generate({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+  });
+
+  return {
+    buffer,
+    filename: `mapa-atendimento-${slugify(mapa.profissional.nome)}-${mapa.ano}-${String(mapa.mes).padStart(2, '0')}.docx`,
+    total: mapa.total,
+    truncated: mapa.total > 28,
+  };
 }
 
 module.exports = {
-  listarProfissionais,
-  obterProfissionalPorId,
-  createProfissional,
-  updateProfissional,
-  updateProfissionalStatus,
-  listarUsuariosSistema,
-  vincularUsuarioSistema,
-  deleteProfissional,
+  listar,
+  gerarDocx,
 };
