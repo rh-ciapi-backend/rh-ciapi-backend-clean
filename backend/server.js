@@ -185,6 +185,11 @@ const saeDocumentosRoutes = safeRequire(
   "saeDocumentosRoutes"
 );
 
+const saeMapasProfissionalRoutes = safeRequire(
+  "./src/routes/saeMapasProfissionalRoutes",
+  "saeMapasProfissionalRoutes"
+);
+
 app.get("/", (_req, res) => {
   return res
     .status(200)
@@ -219,6 +224,7 @@ app.get("/health", (_req, res) => {
       ),
       saeTriagem: Boolean(saeTriagemRoutes),
       saeDocumentos: Boolean(saeDocumentosRoutes),
+      saeMapasProfissional: Boolean(saeMapasProfissionalRoutes),
     },
   });
 });
@@ -441,6 +447,17 @@ if (saeDocumentosRoutes) {
   );
 }
 
+if (saeMapasProfissionalRoutes) {
+  app.use(
+    "/api/sae/mapas-profissional",
+    saeMapasProfissionalRoutes
+  );
+} else {
+  console.warn(
+    "[BOOT] Rotas de mapa mensal do profissional não registradas."
+  );
+}
+
 app.use((req, res) => {
   return res.status(404).json({
     ok: false,
@@ -547,5 +564,9 @@ app.listen(PORT, () => {
 
   console.log(
     "SAE Documentos: GET /api/sae/documentos/contexto"
+  );
+
+  console.log(
+    "SAE Mapa profissional: GET /api/sae/mapas-profissional"
   );
 });
