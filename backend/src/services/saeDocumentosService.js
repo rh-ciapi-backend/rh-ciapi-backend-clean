@@ -411,19 +411,16 @@ async function gerarDocx({ supabase, documentoId }) {
     throw createHttpError('Este modelo ainda não possui template DOCX configurado.', 501);
   }
 
-  const templateCandidates = [
-    path.join(__dirname, '..', 'templates', 'sae', 'servico_social_ficha_avaliacao.docx'),
-    path.join(process.cwd(), 'src', 'templates', 'sae', 'servico_social_ficha_avaliacao.docx'),
-    path.join(process.cwd(), 'backend', 'src', 'templates', 'sae', 'servico_social_ficha_avaliacao.docx'),
-  ];
+  const templatePath = path.join(
+    __dirname,
+    '..',
+    'templates',
+    'sae',
+    'servico_social_ficha_avaliacao.docx',
+  );
 
-  const templatePath = templateCandidates.find((candidate) => fs.existsSync(candidate));
-
-  if (!templatePath) {
-    throw createHttpError(
-      `Template DOCX do Serviço Social não encontrado. Caminhos verificados: ${templateCandidates.join(' | ')}`,
-      500,
-    );
+  if (!fs.existsSync(templatePath)) {
+    throw createHttpError('Template DOCX do Serviço Social não encontrado no backend.', 500);
   }
 
   const binary = fs.readFileSync(templatePath, 'binary');
@@ -561,6 +558,39 @@ async function obterUrlAssinado({ supabase, documentoId }) {
   };
 }
 
+async function excluir({
+  supabase,
+  authUser,
+  actor,
+  documentoId,
+}) {
+  const documento = await getDocumentoRaw(supabase, documentoId);
+  await assertCanEditDocument({
+    supabase,
+    authUser,
+    actor,
+    documento,
+  });
+
+  const status = safeString(documento.status).toUpperCase();
+
+  if (status === 'ASSINADO' || documento.arquivo_assinado_path) {
+    throw createHttpError(
+      'Documento assinado não pode ser excluído. O arquivo deve permanecer no prontuário.',
+      409,
+    );
+  }
+
+  const { error } = await supabase
+    .from('sae_documentos')
+    .delete()
+    .eq('id', documento.id);
+
+  if (error) throw error;
+
+  return { ok: true };
+}
+
 module.exports = {
   contexto,
   buscarUsuarios,
@@ -570,4 +600,5 @@ module.exports = {
   gerarDocx,
   anexarAssinado,
   obterUrlAssinado,
+  excluir,
 };
