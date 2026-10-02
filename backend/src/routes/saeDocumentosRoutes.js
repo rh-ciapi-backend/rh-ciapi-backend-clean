@@ -114,6 +114,22 @@ router.put('/:id', async (req, res, next) => {
   }
 });
 
+
+router.delete('/:id', async (req, res, next) => {
+  try {
+    return res.json(
+      await saeDocumentosService.excluir({
+        supabase,
+        authUser: req.authUser,
+        actor: req.currentUser,
+        documentoId: req.params.id,
+      }),
+    );
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get('/:id/docx', async (req, res, next) => {
   try {
     const { buffer, filename } = await saeDocumentosService.gerarDocx({
