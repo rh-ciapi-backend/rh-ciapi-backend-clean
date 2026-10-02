@@ -53,9 +53,20 @@ router.get(
   requirePermission('sae_profissionais', 'visualizar'),
   async (req, res, next) => {
     try {
-      const response = await saeProfissionaisService.listarProfissionais(
-        supabase,
-      );
+      const listar =
+        typeof saeProfissionaisService.listarProfissionais === 'function'
+          ? saeProfissionaisService.listarProfissionais
+          : typeof saeProfissionaisService.listar === 'function'
+            ? saeProfissionaisService.listar
+            : null;
+
+      if (!listar) {
+        throw new Error(
+          'Service de profissionais do SAE sem método de listagem compatível.',
+        );
+      }
+
+      const response = await listar(supabase);
 
       const permission = (req.currentUser?.permissions || []).find(
         (item) => item.module === 'sae_profissionais',
@@ -132,42 +143,6 @@ router.patch(
           ativo: req.body.ativo,
           req,
         });
-
-      return res.json({ ok: true, profissional });
-    } catch (error) {
-      return next(error);
-    }
-  },
-);
-
-
-router.get(
-  '/usuarios-sistema',
-  requirePermission('sae_profissionais', 'visualizar'),
-  async (req, res, next) => {
-    try {
-      const usuarios = await saeProfissionaisService.listarUsuariosSistema(supabase);
-      return res.json({ usuarios });
-    } catch (error) {
-      return next(error);
-    }
-  },
-);
-
-router.patch(
-  '/:id/usuario-sistema',
-  requirePermission('sae_profissionais', 'editar'),
-  async (req, res, next) => {
-    try {
-      const profissional = await saeProfissionaisService.vincularUsuarioSistema({
-        supabase,
-        authUser: req.authUser,
-        actor: req.currentUser,
-        auditLog,
-        profissionalId: req.params.id,
-        authUserId: req.body?.authUserId,
-        req,
-      });
 
       return res.json({ ok: true, profissional });
     } catch (error) {
