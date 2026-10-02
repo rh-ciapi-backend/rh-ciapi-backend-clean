@@ -142,7 +142,7 @@ async function loadServidoresMap(supabase, ids) {
     .select(
       'servidor,nome_completo,matricula,cpf,email,telefone,cargo,funcao,profissao,setor,lotacao_interna,categoria,status',
     )
-    .in('id', uniqueIds);
+    .in('servidor', uniqueIds);
 
   if (error) throw error;
 
@@ -228,7 +228,7 @@ async function obterProfissionalRow(supabase, profissionalId) {
   const { data, error } = await supabase
     .from('sae_profissionais')
     .select('*')
-    .eq('servidor', id)
+    .eq('id', id)
     .maybeSingle();
 
   if (error) throw error;
@@ -347,7 +347,7 @@ async function buscarServidores(supabase, busca, limit = 20) {
   return {
     servidores: (data || []).map((row) => ({
       ...normalizeServidor(row),
-      jaVinculado: jaVinculados.has(safeString(row.id)),
+      jaVinculado: jaVinculados.has(safeString(row.servidor)),
     })),
   };
 }
@@ -364,7 +364,7 @@ async function obterServidorAtivo(supabase, servidorId) {
     .select(
       'servidor,nome_completo,matricula,cpf,email,telefone,cargo,funcao,profissao,setor,lotacao_interna,categoria,status',
     )
-    .eq('id', id)
+    .eq('servidor', id)
     .maybeSingle();
 
   if (error) throw error;
