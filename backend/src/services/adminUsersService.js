@@ -62,24 +62,8 @@ async function getCurrentActor(supabase, authUser) {
   if (!authUser?.id || !authUser?.email_confirmed_at) throw accessError('Login não confirmado.');
   const email = String(authUser?.email || '').trim().toLowerCase();
 
-  // Vínculo criado pelo RH: nunca concede acesso aos módulos internos.
-  const { data: acessoServidor, error: erroAcesso } = await supabase
-    .from('rh_servidor_acessos').select('servidor_id')
-    .eq('auth_uid', authUser.id).maybeSingle();
-  if (erroAcesso) throw erroAcesso;
-  if (acessoServidor) {
-    return {
-      id: authUser.id,
-      email,
-      perfil: PROFILES.SERVIDOR_LIMITADO,
-      status: 'ATIVO',
-      is_master: false,
-      ambiente: 'RH',
-      ambientes_permitidos: [],
-      permissions: buildDefaultPermissions(PROFILES.SERVIDOR_LIMITADO),
-    };
-  }
-
+  // Conta interna tem prioridade. Isso permite que um servidor do RH também
+  // seja profissional do SAE usando o mesmo auth_user_id.
   const { data, error } = await supabase
     .from('system_users')
     .select('*')
@@ -102,6 +86,24 @@ async function getCurrentActor(supabase, authUser) {
       permissions: data.perfil === PROFILES.MASTER ? buildDefaultPermissions(PROFILES.MASTER) : await getUserPermissions(supabase, data.id, data.perfil),
     };
     return { ...actor, ambientes_permitidos: allowedEnvironments(actor) };
+  }
+
+  // Sem conta interna, mantém o comportamento do portal limitado do RH.
+  const { data: acessoServidor, error: erroAcesso } = await supabase
+    .from('rh_servidor_acessos').select('servidor_id')
+    .eq('auth_uid', authUser.id).maybeSingle();
+  if (erroAcesso) throw erroAcesso;
+  if (acessoServidor) {
+    return {
+      id: authUser.id,
+      email,
+      perfil: PROFILES.SERVIDOR_LIMITADO,
+      status: 'ATIVO',
+      is_master: false,
+      ambiente: 'RH',
+      ambientes_permitidos: [],
+      permissions: buildDefaultPermissions(PROFILES.SERVIDOR_LIMITADO),
+    };
   }
 
   return {
@@ -226,36 +228,6 @@ async function getUserById(supabase, userId) {
   return normalizeManagedUser(data, permissions);
 }
 
-
-async function findAuthUserByEmail(supabase, email) {
-  const targetEmail = String(email || '').trim().toLowerCase();
-  if (!targetEmail) return null;
-
-  const perPage = 1000;
-  let page = 1;
-
-  while (page <= 20) {
-    const { data, error } = await supabase.auth.admin.listUsers({
-      page,
-      perPage,
-    });
-
-    if (error) throw error;
-
-    const users = Array.isArray(data?.users) ? data.users : [];
-    const found = users.find(
-      (user) => String(user?.email || '').trim().toLowerCase() === targetEmail,
-    );
-
-    if (found) return found;
-    if (users.length < perPage) break;
-
-    page += 1;
-  }
-
-  return null;
-}
-
 async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
   const actor = await getCurrentActor(supabase, authAdmin);
 
@@ -299,7 +271,6 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
   }
 
   let authUserId = null;
-  let reusedExistingAuth = false;
 
   {
     if (senhaInicial.length < 6) {
@@ -308,73 +279,30 @@ async function createUser({ supabase, authAdmin, auditLog, payload, req }) {
       throw error;
     }
 
-    const existingAuthUser = await findAuthUserByEmail(supabase, email);
+    const { data: authCreated, error: authError } = await supabase.auth.admin.createUser({
+      email,
+      password: senhaInicial,
+      email_confirm: true,
+      user_metadata: {
+        nome_completo: payload.nome_completo || '',
+        perfil,
+      },
+    });
 
-    if (existingAuthUser?.id) {
-      const { data: portalLink, error: portalLinkError } = await supabase
-        .from('rh_servidor_acessos')
-        .select('servidor_id')
-        .eq('auth_uid', existingAuthUser.id)
-        .maybeSingle();
-
-      if (portalLinkError) throw portalLinkError;
-
-      if (portalLink) {
-        const error = new Error(
-          'Este e-mail já está vinculado ao acesso individual do servidor. Regularize esse vínculo antes de criar uma conta administrativa com o mesmo e-mail.',
-        );
-        error.statusCode = 409;
-        throw error;
-      }
-
-      const { error: updateAuthError } = await supabase.auth.admin.updateUserById(
-        existingAuthUser.id,
-        {
-          password: senhaInicial,
-          user_metadata: {
-            ...(existingAuthUser.user_metadata || {}),
-            nome_completo: payload.nome_completo || '',
-            perfil,
-          },
-        },
-      );
-
-      if (updateAuthError) {
-        const error = new Error(
-          updateAuthError.message || 'Não foi possível regularizar a conta existente no Auth.',
-        );
-        error.statusCode = 400;
-        throw error;
-      }
-
-      authUserId = existingAuthUser.id;
-      reusedExistingAuth = true;
-    } else {
-      const { data: authCreated, error: authError } = await supabase.auth.admin.createUser({
-        email,
-        password: senhaInicial,
-        email_confirm: true,
-        user_metadata: {
-          nome_completo: payload.nome_completo || '',
-          perfil,
-        },
-      });
-
-      if (authError) {
-        const error = new Error(authError.message || 'Não foi possível criar o usuário no Auth.');
-        error.statusCode = 400;
-        throw error;
-      }
-
-      authUserId = authCreated?.user?.id || null;
+    if (authError) {
+      const error = new Error(authError.message || 'Não foi possível criar o usuário no Auth.');
+      error.statusCode = 400;
+      throw error;
     }
+
+    authUserId = authCreated?.user?.id || null;
   }
 
   const { data, error } = await supabase
     .from('system_users')
     .insert({
       auth_user_id: authUserId,
-nome_completo: payload.nome_completo,
+      nome_completo: payload.nome_completo,
       email,
       perfil,
       status,
@@ -401,15 +329,12 @@ nome_completo: payload.nome_completo,
     entityType: 'system_user',
     entityId: data.id,
     entityLabel: email,
-    description: reusedExistingAuth
-      ? `Usuário ${email} regularizado no Auth e vinculado ao sistema por ${actor.email}.`
-      : `Usuário ${email} criado por ${actor.email}.`,
+    description: `Usuário ${email} criado por ${actor.email}.`,
     metadata: {
       perfil,
       status,
       setor_nome,
       auth_user_id: authUserId,
-      auth_reutilizado: reusedExistingAuth,
     },
   });
 
@@ -557,32 +482,6 @@ async function deleteUser({ supabase, authAdmin, auditLog, userId, req }) {
     .eq('id', userId);
 
   if (error) throw error;
-
-  if (targetUser.auth_user_id) {
-    const { data: portalLink, error: portalLinkError } = await supabase
-      .from('rh_servidor_acessos')
-      .select('servidor_id')
-      .eq('auth_uid', targetUser.auth_user_id)
-      .maybeSingle();
-
-    if (portalLinkError) throw portalLinkError;
-
-    // Se a mesma autenticação for usada no portal individual do servidor,
-    // preservamos o Auth. Caso contrário, removemos o login para não deixar
-    // uma conta órfã que impeça recriação futura com o mesmo e-mail.
-    if (!portalLink) {
-      const { error: authDeleteError } = await supabase.auth.admin.deleteUser(
-        targetUser.auth_user_id,
-      );
-
-      if (authDeleteError) {
-        console.error(
-          '[deleteUser] Registro administrativo removido, mas não foi possível remover o Auth:',
-          authDeleteError.message,
-        );
-      }
-    }
-  }
 
   await auditLog(req, {
     action: 'DELETE_USER',
