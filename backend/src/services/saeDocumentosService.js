@@ -411,16 +411,19 @@ async function gerarDocx({ supabase, documentoId }) {
     throw createHttpError('Este modelo ainda não possui template DOCX configurado.', 501);
   }
 
-  const templatePath = path.join(
-    __dirname,
-    '..',
-    'templates',
-    'sae',
-    'servico_social_ficha_avaliacao.docx',
-  );
+  const templateCandidates = [
+    path.join(__dirname, '..', 'templates', 'sae', 'servico_social_ficha_avaliacao.docx'),
+    path.join(process.cwd(), 'src', 'templates', 'sae', 'servico_social_ficha_avaliacao.docx'),
+    path.join(process.cwd(), 'backend', 'src', 'templates', 'sae', 'servico_social_ficha_avaliacao.docx'),
+  ];
 
-  if (!fs.existsSync(templatePath)) {
-    throw createHttpError('Template DOCX do Serviço Social não encontrado no backend.', 500);
+  const templatePath = templateCandidates.find((candidate) => fs.existsSync(candidate));
+
+  if (!templatePath) {
+    throw createHttpError(
+      `Template DOCX do Serviço Social não encontrado. Caminhos verificados: ${templateCandidates.join(' | ')}`,
+      500,
+    );
   }
 
   const binary = fs.readFileSync(templatePath, 'binary');
