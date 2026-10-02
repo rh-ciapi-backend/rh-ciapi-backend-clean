@@ -48,25 +48,56 @@ async function authenticate(req, res, next) {
 
 router.use(authenticate);
 
+// ---------------------------------------------------------
+// AUTOSSERVIÇO DO PROFISSIONAL
+// Deve ficar antes de /:id.
+// ---------------------------------------------------------
+router.post('/minha-senha', async (req, res, next) => {
+  try {
+    const response = await saeProfissionaisService.changeMyPassword({
+      supabase,
+      authUser: req.authUser,
+      actor: req.currentUser,
+      auditLog,
+      newPassword: req.body?.newPassword,
+      req,
+    });
+
+    return res.json(response);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// ---------------------------------------------------------
+// BUSCA SERVIDORES DO RH PARA VINCULAR AO SAE
+// ---------------------------------------------------------
+router.get(
+  '/servidores',
+  requirePermission('sae_profissionais', 'visualizar'),
+  async (req, res, next) => {
+    try {
+      const response = await saeProfissionaisService.buscarServidores(
+        supabase,
+        req.query.busca,
+        req.query.limit,
+      );
+
+      return res.json(response);
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
 router.get(
   '/',
   requirePermission('sae_profissionais', 'visualizar'),
   async (req, res, next) => {
     try {
-      const listar =
-        typeof saeProfissionaisService.listarProfissionais === 'function'
-          ? saeProfissionaisService.listarProfissionais
-          : typeof saeProfissionaisService.listar === 'function'
-            ? saeProfissionaisService.listar
-            : null;
-
-      if (!listar) {
-        throw new Error(
-          'Service de profissionais do SAE sem método de listagem compatível.',
-        );
-      }
-
-      const response = await listar(supabase);
+      const response = await saeProfissionaisService.listarProfissionais(
+        supabase,
+      );
 
       const permission = (req.currentUser?.permissions || []).find(
         (item) => item.module === 'sae_profissionais',
@@ -90,7 +121,7 @@ router.post(
   requirePermission('sae_profissionais', 'criar'),
   async (req, res, next) => {
     try {
-      const profissional = await saeProfissionaisService.createProfissional({
+      const response = await saeProfissionaisService.createProfissional({
         supabase,
         authUser: req.authUser,
         actor: req.currentUser,
@@ -99,7 +130,33 @@ router.post(
         req,
       });
 
-      return res.status(201).json({ ok: true, profissional });
+      return res.status(201).json({
+        ok: true,
+        profissional: response.profissional,
+        senhaTemporaria: response.senhaTemporaria,
+        contaReutilizada: response.contaReutilizada,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+router.post(
+  '/:id/reset-password',
+  requirePermission('sae_profissionais', 'editar'),
+  async (req, res, next) => {
+    try {
+      const response =
+        await saeProfissionaisService.resetProfessionalPassword({
+          supabase,
+          actor: req.currentUser,
+          auditLog,
+          profissionalId: req.params.id,
+          req,
+        });
+
+      return res.json(response);
     } catch (error) {
       return next(error);
     }
@@ -176,6 +233,7 @@ router.use((error, req, res, next) => {
 
   return res.status(error.statusCode || 500).json({
     error: error.message || 'Erro interno no módulo de profissionais do SAE.',
+    details: error.details || undefined,
   });
 });
 
