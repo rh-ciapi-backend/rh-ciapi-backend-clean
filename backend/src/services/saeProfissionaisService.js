@@ -61,7 +61,7 @@ function normalizeServidor(row) {
   if (!row) return null;
 
   return {
-    id: safeString(row.id),
+    id: safeString(row.servidor || row.id || row.servidor_id || row.uuid),
     nome: safeString(row.nome_completo || row.nome),
     matricula: safeString(row.matricula),
     cpf: safeString(row.cpf),
@@ -140,13 +140,13 @@ async function loadServidoresMap(supabase, ids) {
   const { data, error } = await supabase
     .from('servidores')
     .select(
-      'id,nome_completo,matricula,cpf,email,telefone,cargo,funcao,profissao,setor,lotacao_interna,categoria,status',
+      'servidor,nome_completo,matricula,cpf,email,telefone,cargo,funcao,profissao,setor,lotacao_interna,categoria,status',
     )
     .in('id', uniqueIds);
 
   if (error) throw error;
 
-  return new Map((data || []).map((item) => [safeString(item.id), item]));
+  return new Map((data || []).map((item) => [safeString(item.servidor), item]));
 }
 
 async function loadContasMap(supabase, authIds) {
@@ -228,7 +228,7 @@ async function obterProfissionalRow(supabase, profissionalId) {
   const { data, error } = await supabase
     .from('sae_profissionais')
     .select('*')
-    .eq('id', id)
+    .eq('servidor', id)
     .maybeSingle();
 
   if (error) throw error;
@@ -319,7 +319,7 @@ async function buscarServidores(supabase, busca, limit = 20) {
   const { data, error } = await supabase
     .from('servidores')
     .select(
-      'id,nome_completo,matricula,cpf,email,telefone,cargo,funcao,profissao,setor,lotacao_interna,categoria,status',
+      'servidor,nome_completo,matricula,cpf,email,telefone,cargo,funcao,profissao,setor,lotacao_interna,categoria,status',
     )
     .or(filtros.join(','))
     .eq('status', 'ATIVO')
@@ -328,7 +328,7 @@ async function buscarServidores(supabase, busca, limit = 20) {
 
   if (error) throw error;
 
-  const ids = (data || []).map((item) => item.id).filter(Boolean);
+  const ids = (data || []).map((item) => item.servidor).filter(Boolean);
 
   let jaVinculados = new Set();
   if (ids.length) {
@@ -362,7 +362,7 @@ async function obterServidorAtivo(supabase, servidorId) {
   const { data, error } = await supabase
     .from('servidores')
     .select(
-      'id,nome_completo,matricula,cpf,email,telefone,cargo,funcao,profissao,setor,lotacao_interna,categoria,status',
+      'servidor,nome_completo,matricula,cpf,email,telefone,cargo,funcao,profissao,setor,lotacao_interna,categoria,status',
     )
     .eq('id', id)
     .maybeSingle();
