@@ -462,13 +462,34 @@ async function gerarDocx({ supabase, documentoId }) {
 
   const binary = fs.readFileSync(templatePath, 'binary');
   const zip = new PizZip(binary);
-  const doc = new Docxtemplater(zip, {
-    paragraphLoop: true,
-    linebreaks: true,
-    nullGetter() {
-      return '';
-    },
-  });
+  let doc;
+
+  try {
+    doc = new Docxtemplater(zip, {
+      paragraphLoop: true,
+      linebreaks: true,
+      delimiters: {
+        start: '{{',
+        end: '}}',
+      },
+      nullGetter() {
+        return '';
+      },
+    });
+  } catch (error) {
+    const details =
+      error?.properties?.errors
+        ?.map((item) => item?.properties?.explanation || item?.message)
+        .filter(Boolean)
+        .join(' | ') ||
+      error?.message ||
+      'Erro ao interpretar o template DOCX.';
+
+    throw createHttpError(
+      `Falha ao interpretar o template DOCX do Serviço Social: ${details}`,
+      500,
+    );
+  }
 
   const dados = documento.dados && typeof documento.dados === 'object' ? documento.dados : {};
   const context = {};
@@ -488,7 +509,22 @@ async function gerarDocx({ supabase, documentoId }) {
     .filter(Boolean)
     .join(' ');
 
-  doc.render(context);
+  try {
+    doc.render(context);
+  } catch (error) {
+    const details =
+      error?.properties?.errors
+        ?.map((item) => item?.properties?.explanation || item?.message)
+        .filter(Boolean)
+        .join(' | ') ||
+      error?.message ||
+      'Erro ao preencher o template DOCX.';
+
+    throw createHttpError(
+      `Falha ao preencher o template DOCX do Serviço Social: ${details}`,
+      500,
+    );
+  }
 
   const buffer = doc.getZip().generate({
     type: 'nodebuffer',
