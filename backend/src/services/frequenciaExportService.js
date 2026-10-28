@@ -23,6 +23,89 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
+// A configuração institucional é obtida no servidor, nunca do corpo da requisição.
+// O cliente usa SERVICE_KEY apenas no backend; o frontend não recebe essa chave.
+const ASSINATURAS_TABLE = "ciapi_config_assinaturas_frequencia";
+
+async function carregarGerenciaInstitucional() {
+  const { data, error } = await supabase
+    .from(ASSINATURAS_TABLE)
+    .select("gerente_nome,gerente_matricula,gerente_cargo")
+    .eq("id", 1)
+    .single();
+
+  if (error || !data) {
+    throw new Error(`Não foi possível consultar a assinatura institucional: ${error?.message || "registro id=1 não encontrado"}`);
+  }
+  const gerente = {
+    nome: safeText(data.gerente_nome),
+    matricula: safeText(data.gerente_matricula),
+    cargo: safeText(data.gerente_cargo),
+  };
+  if (!gerente.nome || !gerente.matricula || !gerente.cargo) {
+    throw new Error("A configuração institucional de assinatura está incompleta no Supabase.");
+  }
+  return gerente;
+}
+
+// Mantém a aparência do modelo DOCX mesmo que a assinatura antiga tenha sido
+// digitada como texto fixo, eventualmente dividida entre vários runs do Word.
+// O texto é substituído apenas nos parágrafos que contêm a assinatura antiga.
+function xmlEscapeText(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function xmlDecodeText(value) {
+  return String(value).replace(/&amp;/g, "&").replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+}
+function replaceTextInParagraphs(xml, oldText, newText) {
+  const normalizedOld = oldText.toLocaleUpperCase("pt-BR").replace(/\s+/g, " ").trim();
+  let replaced = 0;
+  const updated = xml.replace(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g, paragraph => {
+    const nodes = [...paragraph.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)];
+    if (!nodes.length) return paragraph;
+    const allText = nodes.map(node => xmlDecodeText(node[1])).join("");
+    const normalized = allText.toLocaleUpperCase("pt-BR").replace(/\s+/g, " ").trim();
+    // Só altera parágrafos que contenham a assinatura fixa como conteúdo próprio.
+    if (normalized !== normalizedOld) return paragraph;
+    let first = true;
+    let changed = paragraph.replace(/(<w:t(?:\s[^>]*)?>)[\s\S]*?(<\/w:t>)/g, (_m, open, close) => {
+      if (first) { first = false; return open + xmlEscapeText(newText) + close; }
+      return open + close;
+    });
+    if (changed !== paragraph) replaced += 1;
+    return changed;
+  });
+  return { xml: updated, replaced };
+}
+function aplicarAssinaturaNoDocx(buffer, gerente, templateJaPossuiCampos = false) {
+  const zip = new PizZip(buffer);
+  const docs = Object.keys(zip.files).filter(name => /^word\/(document|header\d*|footer\d*)\.xml$/.test(name));
+  const substitutions = [
+    ["RAIMUNDA ARTEMES FREITAS DAS NEVES", gerente.nome],
+    ["Mat 0164392-4-02", `Mat ${gerente.matricula}`],
+    ["Mat. 0164392-4-02", `Mat ${gerente.matricula}`],
+    ["Gerente do Centro Integrado de Atenção à Pessoa Idosa", gerente.cargo],
+  ];
+  let nameReplacements = 0;
+  for (const file of docs) {
+    let xml = zip.file(file).asText();
+    for (const [from, to] of substitutions) {
+      const result = replaceTextInParagraphs(xml, from, to);
+      xml = result.xml;
+      if (from === substitutions[0][0]) nameReplacements += result.replaced;
+    }
+    zip.file(file, xml);
+  }
+  // Sem o modelo original não podemos garantir a substituição em outros layouts.
+  // Impede que um documento com a antiga responsável seja emitido silenciosamente.
+  if (nameReplacements === 0 && !templateJaPossuiCampos) {
+    throw new Error("O modelo de frequência não contém a assinatura fixa esperada. Envie templates/modelo_frequencia.docx para adequar a substituição.");
+  }
+  return zip.generate({ type: "nodebuffer", compression: "DEFLATE" });
+}
+
 const SMALL_BATCH_SINGLE_FILE_LIMIT = 1;
 const DAY_ROW_START_INDEX = 8;
 const DAY_ROW_END_INDEX = 38;
@@ -675,9 +758,23 @@ async function getBatchConsolidatedItems({ ano, mes, escopoExportacao, payload }
   };
 }
 
-async function buildRenderedDocumentItem({ item, ano, mes, formato, templateBinary }) {
+function modeloPossuiCamposGerencia(templateBinary) {
+  const zip = new PizZip(templateBinary);
+  return Object.keys(zip.files)
+    .filter(name => /^word\/(document|header\d*|footer\d*)\.xml$/.test(name))
+    .some(name => zip.file(name).asText().includes('GERENTE_NOME'));
+}
+
+async function buildRenderedDocumentItem({ item, ano, mes, formato, templateBinary, gerente }) {
   const templateData = buildTemplateDataFromConsolidated(item);
-  const docxBuffer = buildDocxBufferFromTemplate(templateBinary, templateData);
+  // Os placeholders também funcionam em modelos DOCX que já foram atualizados.
+  Object.assign(templateData, {
+    GERENTE_NOME: gerente.nome,
+    GERENTE_MATRICULA: gerente.matricula,
+    GERENTE_CARGO: gerente.cargo,
+  });
+  const renderedDocx = buildDocxBufferFromTemplate(templateBinary, templateData);
+  const docxBuffer = aplicarAssinaturaNoDocx(renderedDocx, gerente, modeloPossuiCamposGerencia(templateBinary));
   const baseFileName = getFriendlyFileName(item?.servidor, ano, mes, "docx").replace(/\.docx$/i, "");
 
   if (formato === "docx") {
@@ -714,6 +811,7 @@ async function exportarFrequenciaIndividual(payload) {
 
   const templatePath = await resolveTemplatePath();
   const templateBinary = await fsp.readFile(templatePath);
+  const gerente = await carregarGerenciaInstitucional();
 
   const consolidated = await getConsolidatedFrequenciaByServidor({
     ano: year,
@@ -729,11 +827,11 @@ async function exportarFrequenciaIndividual(payload) {
   let rendered;
   if (fichas.length === 1) {
     rendered = await buildRenderedDocumentItem({
-      item: consolidated, ano: year, mes: month, formato: format, templateBinary,
+      item: consolidated, ano: year, mes: month, formato: format, templateBinary, gerente,
     });
   } else {
     const documentos = await Promise.all(fichas.map((item) =>
-      buildRenderedDocumentItem({ item, ano: year, mes: month, formato: 'docx', templateBinary })
+      buildRenderedDocumentItem({ item, ano: year, mes: month, formato: 'docx', templateBinary, gerente })
     ));
     const baseFileName = getFriendlyFileName(consolidated.servidor, year, month, 'docx')
       .replace(/\.docx$/i, '_2-vinculos');
@@ -771,6 +869,7 @@ async function exportarFrequenciaLote(payload) {
 
   const templatePath = await resolveTemplatePath();
   const templateBinary = await fsp.readFile(templatePath);
+  const gerente = await carregarGerenciaInstitucional();
 
   const { rows, totalServidores, effectiveFilters } = await getBatchConsolidatedItems({
     ano: year,
@@ -788,6 +887,7 @@ async function exportarFrequenciaLote(payload) {
       mes: month,
       formato: format,
       templateBinary,
+      gerente,
     });
 
     return {
@@ -818,6 +918,7 @@ async function exportarFrequenciaLote(payload) {
         mes: month,
         formato: "docx",
         templateBinary,
+        gerente,
       });
 
       renderedDocs.push(rendered.buffer);
@@ -860,6 +961,7 @@ async function exportarFrequenciaLote(payload) {
       mes: month,
       formato: format,
       templateBinary,
+      gerente,
     });
 
     renderedEntries.push({
